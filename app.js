@@ -6,9 +6,7 @@ const PROFILE_KEY = 'jee_pomodoro_flow_v4_profile';
 const DAY_MS = 86400000;
 const CLOUD_SYNC_ENABLED = true;
 const CLOUD_QUEUE_KEY = 'jee_pomodoro_flow_v4_cloud_queue';
-// Bug 5 fix: single stable per-install ID (replaces both CLOUD_CLIENT_ID_KEY in app.js
-// and CLOUD_DOC_ID_KEY in firebase.js — firebase.js reads this key too via getCloudDocId).
-const CLOUD_DEVICE_ID_KEY = 'jee_pomodoro_flow_v4_device_id';
+const CLOUD_CLIENT_ID_KEY = 'jee_pomodoro_flow_v4_cloud_client_id';
 const CLOUD_SYNC_DEBOUNCE_MS = 2500;
 const CLOUD_SYNC_RETRY_BASE_MS = 2000;
 const CLOUD_SYNC_RETRY_MAX_MS = 60000;
@@ -151,7 +149,10 @@ function loadProfile() {
 }
 function saveState(options = {}) {
   try {
-    state.updatedAt = Date.now();
+    const touchUpdatedAt = options.touchUpdatedAt !== false;
+    if (touchUpdatedAt) {
+      state.updatedAt = Date.now();
+    }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     if (!options.skipCloudSync) {
       queueCloudSync(options);
@@ -172,29 +173,6 @@ function normalizeProfile(profile) {
     updatedAt: Number(profile.updatedAt || 0) || 0
   };
 }
-// Bug 5 fix: one shared stable device ID used by both app.js and firebase.js.
-function getDeviceId() {
-  try {
-    // Migrate from old keys if present so existing installs don't lose their identity.
-    const legacyClientId = localStorage.getItem('jee_pomodoro_flow_v4_cloud_client_id');
-    const legacyDocId = localStorage.getItem('jee_pomodoro_flow_v4_cloud_id');
-    let id = localStorage.getItem(CLOUD_DEVICE_ID_KEY);
-    if (!id) {
-      // Prefer the old client-id key, then the old doc-id key, otherwise generate fresh.
-      id = legacyClientId || legacyDocId ||
-        ((window.crypto && window.crypto.randomUUID)
-          ? window.crypto.randomUUID()
-          : `${Date.now()}_${Math.random().toString(16).slice(2)}`);
-      localStorage.setItem(CLOUD_DEVICE_ID_KEY, id);
-    }
-    // Clean up legacy keys so they don't diverge in future.
-    if (legacyClientId) localStorage.removeItem('jee_pomodoro_flow_v4_cloud_client_id');
-    if (legacyDocId) localStorage.removeItem('jee_pomodoro_flow_v4_cloud_id');
-    return id;
-  } catch {
-    return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-  }
-}
 function saveProfile(profile, options = {}) {
   try {
     state.profile = normalizeProfile(profile);
@@ -203,8 +181,6 @@ function saveProfile(profile, options = {}) {
     localStorage.setItem(PROFILE_KEY, JSON.stringify(state.profile));
     state.updatedAt = Date.now();
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    // Bug 1 fix: callers that have already done claimCloudIdentity() pass
-    // skipCloudSync:true so we never push an empty snapshot before merge.
     if (!options.skipCloudSync) {
       queueCloudSync({ reason: 'profile-change', immediate: true });
     }
@@ -237,7 +213,20 @@ function logCloud(level, message, details) {
   if (details !== undefined) console[level](prefix, message, details);
   else console[level](prefix, message);
 }
-// Bug 5 fix: replaced getCloudClientId() with getDeviceId() (defined above).
+function getCloudClientId() {
+  try {
+    let id = localStorage.getItem(CLOUD_CLIENT_ID_KEY);
+    if (!id) {
+      id = (window.crypto && window.crypto.randomUUID)
+        ? window.crypto.randomUUID()
+        : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+      localStorage.setItem(CLOUD_CLIENT_ID_KEY, id);
+    }
+    return id;
+  } catch {
+    return `${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  }
+}
 function normalizeCloudQueue(queue) {
   if (!queue || typeof queue !== 'object' || !queue.state) return null;
   return {
@@ -554,11 +543,10 @@ async function flushCloudSync(options = {}) {
 }
 async function reconcileCloudState(options = {}) {
   if (!CLOUD_SYNC_ENABLED) return false;
-  let changed = false;
+  let changed = Boolean(await pullCloudStateIfNewer({ force: true, reason: options.reason || 'reconcile' }));
   if (cloudQueue && cloudQueue.state) {
     changed = Boolean(await flushCloudSync({ force: Boolean(options.force || navigator.onLine !== false), reason: options.reason || 'reconcile' })) || changed;
   }
-  changed = Boolean(await pullCloudStateIfNewer({ force: true, reason: options.reason || 'reconcile' })) || changed;
   return changed;
 }
 function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
@@ -672,18 +660,7 @@ function normalizeState(nextState) {
     monthly: Number.isFinite(normalized.analyticsSelections?.monthly) ? normalized.analyticsSelections.monthly : -1
   };
   normalized.achievements = { ...cloneDefaultState().achievements, ...(normalized.achievements || {}) };
-
-  // Bug 2 fix: check for an actual name rather than object truthiness.
-  // The embedded profile is always a truthy object (even when name is ''),
-  // so `|| loadProfile()` never fired in the original code, meaning the
-  // standalone PROFILE_KEY backup was silently ignored.
-  const embeddedProfile = normalizeProfile(
-    nextState && typeof nextState === 'object' ? nextState.profile : null
-  );
-  normalized.profile = embeddedProfile.name
-    ? embeddedProfile
-    : normalizeProfile(loadProfile());
-
+  normalized.profile = normalizeProfile(normalized.profile || loadProfile());
   const seenRecordIds = new Set();
   normalized.records = Array.isArray(normalized.records)
     ? normalized.records
@@ -980,7 +957,7 @@ function render(options = {}) {
   renderTimerOnly();
   if (state.page === 'analytics') renderAnalytics();
   else renderAchievements();
-  if (!options.skipSave) saveState();
+  if (!options.skipSave) saveState({ skipCloudSync: true, touchUpdatedAt: false, reason: 'render' });
 }
 function requestWakeLock() {
   return (async () => {
@@ -1514,15 +1491,6 @@ function ensureProfile() {
 function normalizedProfileHasName(profile) {
   return Boolean(normalizeProfile(profile).name);
 }
-
-// Bug 1 fix: reordered to pull-then-push. The original code called
-// saveProfile() (which queued an immediate cloud push) BEFORE
-// claimCloudIdentity() (the async pull+merge). The 0ms push would complete
-// before the network round-trips returned, so an empty local snapshot
-// overwrote real cloud history. New order:
-//   1. claimCloudIdentity()  — pull & merge into local state (no push)
-//   2. saveProfile(..., { skipCloudSync: true }) — persist name locally only
-//   3. saveState({ immediate: true })  — single push with fully merged state
 async function saveProfileFromInput() {
   if (profileModalBusy) return;
   profileModalBusy = true;
@@ -1534,11 +1502,7 @@ async function saveProfileFromInput() {
       return;
     }
 
-    // Step 1: pull any existing cloud progress for this name FIRST,
-    // before touching the cloud, so the merge is done before any push.
     const { merged, mergedCount } = await claimCloudIdentity(name);
-
-    // Step 2: persist the profile locally only (no cloud push yet).
     const ok = saveProfile(
       { name, createdAt: state.profile?.createdAt || Date.now(), updatedAt: Date.now() },
       { skipCloudSync: true }
@@ -1549,9 +1513,8 @@ async function saveProfileFromInput() {
     closeProfileModal(true);
     render({ skipSave: true });
 
-    // Step 3: now that local state is fully merged, do a single push.
     saveState({ immediate: true, reason: merged ? 'progress-restored' : 'profile-claimed' });
-    render();
+    render({ skipSave: true });
 
     const mod = await ensureCloudSync();
     if (mod && typeof mod.pushDeviceProfile === 'function') {
@@ -1586,13 +1549,8 @@ function exportBackup() {
   a.click();
   URL.revokeObjectURL(url);
 }
-
-// Bug 3 fix: skipCloudSync:true so clearing local data doesn't push an
-// empty snapshot to Firestore, which would wipe cloud history and
-// leaderboard totals. The button is labelled "Clear local data" — it
-// should only clear the device, not the cloud.
 function clearLocalData() {
-  if (!confirm('Clear all local study data on this device? Your cloud / leaderboard data will NOT be affected.')) return;
+  if (!confirm('Clear all local study data on this device?')) return;
   state.records = [];
   state.streak = 0;
   state.lastDate = null;
@@ -1605,12 +1563,9 @@ function clearLocalData() {
   clearInterval(interval);
   interval = null;
   releaseWakeLock();
-  // skipCloudSync prevents pushing the now-empty record set to Firestore.
-  saveState({ immediate: true, reason: 'local-data-cleared', skipCloudSync: true });
-  // Also clear any pending cloud sync queue so the empty state isn't retried.
-  clearCloudQueue();
+  saveState({ immediate: true, reason: 'local-data-cleared' });
   render();
-  showToast('Local data cleared (cloud data preserved)');
+  showToast('Local data cleared');
   void refreshLeaderboard({ force: true });
 }
 function setAnalyticsView(view) {
@@ -1630,8 +1585,7 @@ function sanitizeNumbers() {
   state.roundsBeforeLong = Math.max(2, Math.min(8, Number(state.roundsBeforeLong) || 4));
 }
 
-// Bug 5 fix: use the single consolidated device ID.
-cloudClientId = getDeviceId();
+cloudClientId = getCloudClientId();
 cloudQueue = loadCloudQueue();
 
 function init() {
@@ -1659,7 +1613,7 @@ function init() {
   closeSessionModal();
   if (els.profileName) els.profileName.textContent = state.profile.name || 'Guest';
   ensureProfile();
-  render();
+  render({ skipSave: true });
 
   if (state.running) {
     if (!restoreTimerFromCheckpoint()) {
@@ -1692,19 +1646,19 @@ function init() {
 
   window.addEventListener('beforeunload', () => {
     saveTimerCheckpoint();
-    saveState({ immediate: true, reason: 'beforeunload' });
+    saveState({ skipCloudSync: true, touchUpdatedAt: false, reason: 'beforeunload' });
   });
 
   window.addEventListener('pagehide', () => {
     saveTimerCheckpoint();
-    saveState({ immediate: true, reason: 'pagehide' });
+    saveState({ skipCloudSync: true, touchUpdatedAt: false, reason: 'pagehide' });
     releaseWakeLock();
   });
 
   window.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
       saveTimerCheckpoint();
-      saveState({ immediate: true, reason: 'hidden' });
+      saveState({ skipCloudSync: true, touchUpdatedAt: false, reason: 'hidden' });
       return;
     }
     if (document.visibilityState === 'visible' && state.running) {
@@ -1883,7 +1837,7 @@ function cleanupAndRefresh(options = {}) {
   updateAchievements();
   if (state.page === 'analytics') renderAnalytics();
   else renderTimerOnly();
-  if (!options.skipSave) saveState();
+  if (!options.skipSave) saveState({ skipCloudSync: true, touchUpdatedAt: false, reason: 'cleanup-refresh' });
 }
 init();
 cleanupAndRefresh({ skipSave: true });
@@ -1915,5 +1869,5 @@ function tick() {
 
   saveTimerCheckpoint();
   renderTimerOnly();
-  saveState();
+  saveState({ skipCloudSync: true, touchUpdatedAt: false, reason: 'timer-tick' });
 }

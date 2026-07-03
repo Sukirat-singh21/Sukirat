@@ -12,12 +12,7 @@ const APP_NAME = 'jee-pomodoro-flow';
 const CLOUD_COLLECTION = 'pwaState';
 const DEVICE_PROFILE_COLLECTION = 'deviceProfiles';
 const LEADERBOARD_COLLECTION = 'leaderboardUsers';
-
-// Bug 5 fix: use the same key as app.js so both modules share one stable
-// per-install device ID. The old separate CLOUD_DOC_ID_KEY
-// ('jee_pomodoro_flow_v4_cloud_id') is migrated away inside app.js's
-// getDeviceId(), so we just read the consolidated key here.
-const CLOUD_DEVICE_ID_KEY = 'jee_pomodoro_flow_v4_device_id';
+const CLOUD_DOC_ID_KEY = 'jee_pomodoro_flow_v4_cloud_id';
 
 let firebasePromise = null;
 const firebaseStatus = {
@@ -37,19 +32,14 @@ function toErrorMessage(error) {
   return error && error.message ? error.message : String(error || 'Unknown Firebase error');
 }
 
-// Bug 5 fix: reads the single shared device ID key (same as app.js).
-// Migration from the old 'jee_pomodoro_flow_v4_cloud_id' key is handled
-// in app.js's getDeviceId() which runs on startup, so by the time any
-// firebase.js function is called the consolidated key is already set.
 function getCloudDocId() {
   try {
-    let id = localStorage.getItem(CLOUD_DEVICE_ID_KEY);
+    let id = localStorage.getItem(CLOUD_DOC_ID_KEY);
     if (!id) {
-      // Fallback: generate a new ID and store it under the shared key.
       id = (window.crypto && window.crypto.randomUUID)
         ? window.crypto.randomUUID()
         : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-      localStorage.setItem(CLOUD_DEVICE_ID_KEY, id);
+      localStorage.setItem(CLOUD_DOC_ID_KEY, id);
     }
     return id;
   } catch {
