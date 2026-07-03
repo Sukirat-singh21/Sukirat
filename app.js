@@ -27,6 +27,7 @@ const els = {
   clearDataBtn: $('clearDataBtn'),
   timerPage: $('timerPage'),
   analyticsPage: $('analyticsPage'),
+  leaderboardPage: $('leaderboardPage'),
   appTitle: $('appTitle'),
   heroTitle: $('heroTitle'),
   statusPill: $('statusPill'),
@@ -69,6 +70,8 @@ const els = {
   graphArea: $('graphArea'),
   analyticsDetail: $('analyticsDetail'),
   analyticsSubline: $('analyticsSubline'),
+  leaderboardPodium: $('leaderboardPodium'),
+  leaderboardCount: $('leaderboardCount'),
   achMadeBy: $('achMadeBy'),
   achJee: $('achJee'),
   achEnayat: $('achEnayat'),
@@ -149,8 +152,7 @@ function loadProfile() {
 }
 function saveState(options = {}) {
   try {
-    const touchUpdatedAt = options.touchUpdatedAt !== false;
-    if (touchUpdatedAt) {
+    if (options.touchUpdatedAt !== false) {
       state.updatedAt = Date.now();
     }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -179,7 +181,9 @@ function saveProfile(profile, options = {}) {
     if (!state.profile.createdAt) state.profile.createdAt = Date.now();
     state.profile.updatedAt = Date.now();
     localStorage.setItem(PROFILE_KEY, JSON.stringify(state.profile));
-    state.updatedAt = Date.now();
+    if (options.touchStateUpdatedAt !== false) {
+      state.updatedAt = Date.now();
+    }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     if (!options.skipCloudSync) {
       queueCloudSync({ reason: 'profile-change', immediate: true });
@@ -653,14 +657,15 @@ function normalizeState(nextState) {
   const normalized = { ...cloneDefaultState(), ...(nextState && typeof nextState === 'object' ? nextState : {}) };
   normalized.currentMode = ['focus', 'short', 'long'].includes(normalized.currentMode) ? normalized.currentMode : 'focus';
   normalized.analyticsView = normalized.analyticsView === 'monthly' ? 'monthly' : 'weekly';
-  normalized.page = normalized.page === 'analytics' ? 'analytics' : 'timer';
+  normalized.page = ['analytics', 'leaderboard'].includes(normalized.page) ? normalized.page : 'timer';
   normalized.lastSubject = safeSubject(normalized.lastSubject);
   normalized.analyticsSelections = {
     weekly: Number.isFinite(normalized.analyticsSelections?.weekly) ? normalized.analyticsSelections.weekly : -1,
     monthly: Number.isFinite(normalized.analyticsSelections?.monthly) ? normalized.analyticsSelections.monthly : -1
   };
   normalized.achievements = { ...cloneDefaultState().achievements, ...(normalized.achievements || {}) };
-  normalized.profile = normalizeProfile(normalized.profile || loadProfile());
+  const embeddedProfile = normalizeProfile(normalized.profile);
+  normalized.profile = embeddedProfile.name ? embeddedProfile : normalizeProfile(loadProfile());
   const seenRecordIds = new Set();
   normalized.records = Array.isArray(normalized.records)
     ? normalized.records
@@ -765,10 +770,11 @@ function setPage(page) {
   state.page = page;
   els.timerPage.classList.toggle('active', page === 'timer');
   els.analyticsPage.classList.toggle('active', page === 'analytics');
+  if (els.leaderboardPage) els.leaderboardPage.classList.toggle('active', page === 'leaderboard');
   document.querySelectorAll('.drawer-item[data-page]').forEach(btn => btn.classList.toggle('active', btn.dataset.page === page));
-  saveState();
+  saveState({ skipCloudSync: true, touchUpdatedAt: false, reason: 'page-change' });
   closeDrawer();
-  render();
+  render({ skipSave: true });
 }
 function renderTimerOnly() {
   els.timer.textContent = fmt(state.remaining);
@@ -956,8 +962,9 @@ function render(options = {}) {
   updateStats();
   renderTimerOnly();
   if (state.page === 'analytics') renderAnalytics();
+  else if (state.page === 'leaderboard') renderLeaderboard();
   else renderAchievements();
-  if (!options.skipSave) saveState({ skipCloudSync: true, touchUpdatedAt: false, reason: 'render' });
+  if (!options.skipSave) saveState({ skipCloudSync: true, touchUpdatedAt: false, reason: options.reason || 'render' });
 }
 function requestWakeLock() {
   return (async () => {
@@ -1302,7 +1309,7 @@ function renderPeriodButtons() {
   els.periodChips.innerHTML = buckets.map((b, idx) => `<button class="chip ${idx === currentIndex ? 'active' : ''}" data-period="${idx}">${b.label}</button>`).join('');
   els.periodChips.querySelectorAll('[data-period]').forEach(btn => btn.addEventListener('click', () => {
     setAnalyticsIndex(view, Number(btn.dataset.period));
-    saveState();
+    saveState({ skipCloudSync: true, touchUpdatedAt: false, reason: 'analytics-period-change' });
     currentAnalyticsDetail = null;
     renderAnalytics();
   }));
@@ -1413,13 +1420,13 @@ function renderAnalytics() {
 function handleTitleTap() {
   state.titleTapCount = (state.titleTapCount || 0) + 1;
   clearTimeout(titleTapTimer);
-  titleTapTimer = setTimeout(() => { state.titleTapCount = 0; saveState(); }, 1400);
+  titleTapTimer = setTimeout(() => { state.titleTapCount = 0; saveState({ skipCloudSync: true, touchUpdatedAt: false, reason: 'title-tap-reset' }); }, 1400);
   if (state.titleTapCount >= 7) {
     state.titleTapCount = 0;
     showToast('Made with ❤️ by Sukirat');
     els.appTitle.textContent = 'Made with ❤️ by Sukirat';
     setTimeout(() => { els.appTitle.textContent = 'JEE Pomodoro Flow'; }, 2800);
-    saveState();
+    saveState({ skipCloudSync: true, touchUpdatedAt: false, reason: 'title-tap-easter-egg' });
   }
 }
 function maybeUnlockHiddenEggs() {
@@ -1441,19 +1448,65 @@ function renderAchievements() {
   els.achEnayat.classList.toggle('unlocked', unlocked);
   els.achEnayat.classList.toggle('locked', !unlocked);
 }
+function getLeaderboardMedalClass(index) {
+  if (index === 0) return 'gold';
+  if (index === 1) return 'silver';
+  if (index === 2) return 'bronze';
+  return 'standard';
+}
+function getLeaderboardMedalLabel(index) {
+  if (index === 0) return '🥇';
+  if (index === 1) return '🥈';
+  if (index === 2) return '🥉';
+  return String(index + 1);
+}
 function renderLeaderboard() {
   if (!els.leaderboardList) return;
   if (!leaderboardRows.length) {
-    els.leaderboardList.innerHTML = '<div class="mini-line"><span>No leaderboard data yet</span><strong>0h</strong></div>';
+    els.leaderboardList.innerHTML = '<div class="leaderboard-empty">No leaderboard data yet</div>';
+    if (els.leaderboardPodium) els.leaderboardPodium.innerHTML = '';
+    if (els.leaderboardCount) els.leaderboardCount.textContent = '0 players';
     if (els.leaderboardUpdatedAt) els.leaderboardUpdatedAt.textContent = 'Live';
     return;
   }
+
+  const podiumRows = leaderboardRows.slice(0, 3);
+  if (els.leaderboardPodium) {
+    els.leaderboardPodium.innerHTML = podiumRows.map((row, index) => {
+      const name = escapeHtml(String(row.name || 'Student').trim() || 'Student');
+      const hours = minutesToHuman(Math.round(Number(row.totalMinutes) || 0));
+      const questions = Number(row.totalQuestions) || 0;
+      const placeClass = getLeaderboardMedalClass(index);
+      return `
+        <div class="podium-card ${placeClass}">
+          <div class="podium-medal">${getLeaderboardMedalLabel(index)}</div>
+          <div class="podium-name">${name}</div>
+          <div class="podium-meta">${hours} · ${questions} q</div>
+        </div>`;
+    }).join('');
+  }
+
   els.leaderboardList.innerHTML = leaderboardRows.map((row, index) => {
     const name = escapeHtml(String(row.name || 'Student').trim() || 'Student');
     const hours = minutesToHuman(Math.round(Number(row.totalMinutes) || 0));
     const questions = Number(row.totalQuestions) || 0;
-    return `<div class="mini-line"><span>${index + 1}. ${name}</span><strong>${hours} · ${questions} q</strong></div>`;
+    const medalClass = getLeaderboardMedalClass(index);
+    return `
+      <div class="leaderboard-row ${medalClass}">
+        <div class="rank-badge ${medalClass}">${getLeaderboardMedalLabel(index)}</div>
+        <div class="leaderboard-meta">
+          <strong>${index + 1}. ${name}</strong>
+          <span>${questions} questions</span>
+        </div>
+        <div class="leaderboard-stats">
+          <strong>${hours}</strong>
+          <span>study</span>
+        </div>
+      </div>`;
   }).join('');
+  if (els.leaderboardCount) {
+    els.leaderboardCount.textContent = `${leaderboardRows.length} player${leaderboardRows.length === 1 ? '' : 's'}`;
+  }
   if (els.leaderboardUpdatedAt) {
     els.leaderboardUpdatedAt.textContent = `Updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
   }
@@ -1501,18 +1554,16 @@ async function saveProfileFromInput() {
       showToast('Enter a name to continue');
       return;
     }
-
-    const { merged, mergedCount } = await claimCloudIdentity(name);
     const ok = saveProfile(
       { name, createdAt: state.profile?.createdAt || Date.now(), updatedAt: Date.now() },
-      { skipCloudSync: true }
+      { skipCloudSync: true, touchStateUpdatedAt: true }
     );
     if (!ok) return;
-
     if (els.profileName) els.profileName.textContent = name;
-    closeProfileModal(true);
-    render({ skipSave: true });
 
+    const { merged, mergedCount } = await claimCloudIdentity(name);
+    state.profile = normalizeProfile({ ...state.profile, name });
+    closeProfileModal(true);
     saveState({ immediate: true, reason: merged ? 'progress-restored' : 'profile-claimed' });
     render({ skipSave: true });
 
@@ -1563,7 +1614,7 @@ function clearLocalData() {
   clearInterval(interval);
   interval = null;
   releaseWakeLock();
-  saveState({ immediate: true, reason: 'local-data-cleared' });
+  saveState({ immediate: true, reason: 'local-data-cleared', skipCloudSync: true });
   render();
   showToast('Local data cleared');
   void refreshLeaderboard({ force: true });
@@ -1574,7 +1625,7 @@ function setAnalyticsView(view) {
   if (!state.analyticsSelections || typeof state.analyticsSelections !== 'object') {
     state.analyticsSelections = { weekly: -1, monthly: -1 };
   }
-  saveState();
+  saveState({ skipCloudSync: true, touchUpdatedAt: false, reason: 'analytics-view-change' });
   document.querySelectorAll('.tab[data-analytics-view]').forEach(btn => btn.classList.toggle('active', btn.dataset.analyticsView === state.analyticsView));
   renderAnalytics();
 }
@@ -1598,7 +1649,7 @@ function init() {
   sanitizeNumbers();
   if (!state.total) state.total = secondsForMode(state.currentMode);
   if (!state.remaining) state.remaining = state.total;
-  if (state.page !== 'analytics') state.page = 'timer';
+  if (!['analytics', 'leaderboard'].includes(state.page)) state.page = 'timer';
   if (state.pendingSession) state.running = false;
   state.remaining = clamp(Number(state.remaining) || state.total, 0, state.total || secondsForMode(state.currentMode));
   state.total = Math.max(1, Number(state.total) || secondsForMode(state.currentMode));
@@ -1606,6 +1657,7 @@ function init() {
   els.timerPage.classList.toggle('active', state.page === 'timer');
   document.querySelectorAll('.drawer-item[data-page]').forEach(btn => btn.classList.toggle('active', btn.dataset.page === state.page));
   els.analyticsPage.classList.toggle('active', state.page === 'analytics');
+  if (els.leaderboardPage) els.leaderboardPage.classList.toggle('active', state.page === 'leaderboard');
   document.querySelectorAll('.tab[data-analytics-view]').forEach(btn => btn.classList.toggle('active', btn.dataset.analyticsView === (state.analyticsView || 'weekly')));
 
   currentSubject = safeSubject(state.lastSubject);
@@ -1613,7 +1665,7 @@ function init() {
   closeSessionModal();
   if (els.profileName) els.profileName.textContent = state.profile.name || 'Guest';
   ensureProfile();
-  render({ skipSave: true });
+  render();
 
   if (state.running) {
     if (!restoreTimerFromCheckpoint()) {
@@ -1646,19 +1698,19 @@ function init() {
 
   window.addEventListener('beforeunload', () => {
     saveTimerCheckpoint();
-    saveState({ skipCloudSync: true, touchUpdatedAt: false, reason: 'beforeunload' });
+    saveState({ immediate: true, reason: 'beforeunload' });
   });
 
   window.addEventListener('pagehide', () => {
     saveTimerCheckpoint();
-    saveState({ skipCloudSync: true, touchUpdatedAt: false, reason: 'pagehide' });
+    saveState({ immediate: true, reason: 'pagehide' });
     releaseWakeLock();
   });
 
   window.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'hidden') {
       saveTimerCheckpoint();
-      saveState({ skipCloudSync: true, touchUpdatedAt: false, reason: 'hidden' });
+      saveState({ immediate: true, reason: 'hidden' });
       return;
     }
     if (document.visibilityState === 'visible' && state.running) {
@@ -1774,11 +1826,15 @@ els.logBtn.addEventListener('click', () => {
     openSessionModal();
     return;
   }
-  const wasFocus = state.currentMode === 'focus';
+
+  const isRunningFocus = state.running && state.currentMode === 'focus' && state.remaining < state.total;
+  if (!isRunningFocus) {
+    showToast('Start a focus session first.');
+    return;
+  }
+
   const completedRound = state.cycleCount;
-  const elapsedFocusMinutes = wasFocus
-    ? (state.remaining < state.total ? Math.max(1, Math.round((state.total - state.remaining) / 60)) : state.focus)
-    : state.focus;
+  const elapsedFocusMinutes = Math.max(1, Math.round((state.total - state.remaining) / 60));
   if (state.running) pauseTimer();
   state.pendingSession = {
     minutes: elapsedFocusMinutes,
@@ -1790,7 +1846,7 @@ els.logBtn.addEventListener('click', () => {
   state.total = secondsForMode(state.currentMode);
   state.remaining = state.total;
   openSessionModal();
-  render();
+  render({ skipSave: true });
 });
 
 els.closeModalBtn.addEventListener('click', dismissSessionModal);
@@ -1836,8 +1892,9 @@ function cleanupAndRefresh(options = {}) {
   updateStats();
   updateAchievements();
   if (state.page === 'analytics') renderAnalytics();
+  else if (state.page === 'leaderboard') renderLeaderboard();
   else renderTimerOnly();
-  if (!options.skipSave) saveState({ skipCloudSync: true, touchUpdatedAt: false, reason: 'cleanup-refresh' });
+  if (!options.skipSave) saveState({ skipCloudSync: true, touchUpdatedAt: false, reason: options.reason || 'cleanup-refresh' });
 }
 init();
 cleanupAndRefresh({ skipSave: true });
@@ -1869,5 +1926,5 @@ function tick() {
 
   saveTimerCheckpoint();
   renderTimerOnly();
-  saveState({ skipCloudSync: true, touchUpdatedAt: false, reason: 'timer-tick' });
+  saveState({ skipCloudSync: true, touchUpdatedAt: false, reason: 'tick' });
 }

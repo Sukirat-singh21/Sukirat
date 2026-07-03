@@ -17,15 +17,20 @@ self.addEventListener('fetch', event => {
 
   const isAppShell = event.request.mode === 'navigate' || /\.(js|html|css)$/.test(requestUrl.pathname);
   if (isAppShell) {
-    event.respondWith(
-      fetch(event.request).then(resp => {
-        if (resp && resp.ok && resp.type === 'basic') {
+    event.respondWith((async () => {
+      try {
+        const resp = await fetch(event.request);
+        if (resp && resp.status === 200 && resp.type === 'basic') {
           const copy = resp.clone();
           caches.open(CACHE).then(cache => cache.put(event.request, copy)).catch(() => {});
         }
         return resp;
-      }).catch(() => caches.match(event.request).then(cached => cached || caches.match('index.html')))
-    );
+      } catch {
+        const cached = await caches.match(event.request);
+        if (cached) return cached;
+        return caches.match('index.html');
+      }
+    })());
     return;
   }
 
