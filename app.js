@@ -20,6 +20,9 @@ const els = {
   profileName: $('profileName'),
   leaderboardList: $('leaderboardList'),
   leaderboardUpdatedAt: $('leaderboardUpdatedAt'),
+  leaderboardCount: $('leaderboardCount'),
+  leaderboardPodium: $('leaderboardPodium'),
+  leaderboardPage: $('leaderboardPage'),
   drawer: $('drawer'),
   drawerBackdrop: $('drawerBackdrop'),
   closeDrawerBtn: $('closeDrawerBtn'),
@@ -647,7 +650,7 @@ function normalizeState(nextState) {
   const normalized = { ...cloneDefaultState(), ...(nextState && typeof nextState === 'object' ? nextState : {}) };
   normalized.currentMode = ['focus', 'short', 'long'].includes(normalized.currentMode) ? normalized.currentMode : 'focus';
   normalized.analyticsView = normalized.analyticsView === 'monthly' ? 'monthly' : 'weekly';
-  normalized.page = normalized.page === 'analytics' ? 'analytics' : 'timer';
+  normalized.page = ['timer', 'analytics', 'leaderboard'].includes(normalized.page) ? normalized.page : 'timer';
   normalized.lastSubject = safeSubject(normalized.lastSubject);
   normalized.analyticsSelections = {
     weekly: Number.isFinite(normalized.analyticsSelections?.weekly) ? normalized.analyticsSelections.weekly : -1,
@@ -756,10 +759,11 @@ function closeDrawer() {
   els.drawerBackdrop.classList.add('hidden');
 }
 function setPage(page) {
-  state.page = page;
-  els.timerPage.classList.toggle('active', page === 'timer');
-  els.analyticsPage.classList.toggle('active', page === 'analytics');
-  document.querySelectorAll('.drawer-item[data-page]').forEach(btn => btn.classList.toggle('active', btn.dataset.page === page));
+  state.page = ['timer', 'analytics', 'leaderboard'].includes(page) ? page : 'timer';
+  els.timerPage.classList.toggle('active', state.page === 'timer');
+  if (els.analyticsPage) els.analyticsPage.classList.toggle('active', state.page === 'analytics');
+  if (els.leaderboardPage) els.leaderboardPage.classList.toggle('active', state.page === 'leaderboard');
+  document.querySelectorAll('.drawer-item[data-page]').forEach(btn => btn.classList.toggle('active', btn.dataset.page === state.page));
   saveState();
   closeDrawer();
   render();
@@ -954,6 +958,7 @@ function render(options = {}) {
   updateStats();
   renderTimerOnly();
   if (state.page === 'analytics') renderAnalytics();
+  else if (state.page === 'leaderboard') renderLeaderboard();
   else renderAchievements();
   if (!options.skipSave) saveState();
 }
@@ -1439,24 +1444,61 @@ function renderAchievements() {
   els.achEnayat.classList.toggle('unlocked', unlocked);
   els.achEnayat.classList.toggle('locked', !unlocked);
 }
+
 function renderLeaderboard() {
   if (!els.leaderboardList) return;
-  if (!leaderboardRows.length) {
-    els.leaderboardList.innerHTML = '<div class="mini-line"><span>No leaderboard data yet</span><strong>0h</strong></div>';
-    if (els.leaderboardUpdatedAt) els.leaderboardUpdatedAt.textContent = 'Live';
+
+  const rows = Array.isArray(leaderboardRows) ? leaderboardRows : [];
+  const topRows = rows.slice(0, 3);
+
+  if (els.leaderboardCount) {
+    els.leaderboardCount.textContent = `${rows.length} player${rows.length === 1 ? '' : 's'}`;
+  }
+  if (els.leaderboardUpdatedAt) {
+    els.leaderboardUpdatedAt.textContent = rows.length
+      ? `Updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+      : 'Live';
+  }
+
+  if (els.leaderboardPodium) {
+    if (!topRows.length) {
+      els.leaderboardPodium.innerHTML = '<div class="podium-empty">No leaderboard data yet</div>';
+    } else {
+      const placeLabels = ['1st', '2nd', '3rd'];
+      const medals = ['🥇', '🥈', '🥉'];
+      els.leaderboardPodium.innerHTML = topRows.map((row, index) => {
+        const name = escapeHtml(String(row.name || 'Student').trim() || 'Student');
+        const hours = minutesToHuman(Math.round(Number(row.totalMinutes) || 0));
+        const questions = Number(row.totalQuestions) || 0;
+        const position = index + 1;
+        return `
+          <div class="podium-card place-${position}">
+            <div class="podium-rank">${medals[index]} ${placeLabels[index]}</div>
+            <div class="podium-name">${name}</div>
+            <div class="podium-meta">${hours} · ${questions} q</div>
+          </div>
+        `;
+      }).join('');
+    }
+  }
+
+  if (!rows.length) {
+    els.leaderboardList.innerHTML = '<div class="mini-line leaderboard-empty-row"><span>No leaderboard data yet</span><strong>0h</strong></div>';
     return;
   }
-  els.leaderboardList.innerHTML = leaderboardRows.map((row, index) => {
+
+  els.leaderboardList.innerHTML = rows.map((row, index) => {
     const name = escapeHtml(String(row.name || 'Student').trim() || 'Student');
     const hours = minutesToHuman(Math.round(Number(row.totalMinutes) || 0));
     const questions = Number(row.totalQuestions) || 0;
-    return `<div class="mini-line"><span>${index + 1}. ${name}</span><strong>${hours} · ${questions} q</strong></div>`;
+    const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : '';
+    const rankLabel = medal ? `${medal} ${index + 1}` : `${index + 1}`;
+    const rowClass = index < 3 ? ` rank-${index + 1}` : '';
+    return `<div class="mini-line leaderboard-row${rowClass}"><span>${rankLabel}. ${name}</span><strong>${hours} · ${questions} q</strong></div>`;
   }).join('');
-  if (els.leaderboardUpdatedAt) {
-    els.leaderboardUpdatedAt.textContent = `Updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
-  }
 }
 function openProfileModal() {
+
   if (!els.profileModal) return;
   els.profileModal.classList.remove('hidden');
   els.profileModal.setAttribute('aria-hidden', 'false');
@@ -1591,14 +1633,15 @@ function init() {
   sanitizeNumbers();
   if (!state.total) state.total = secondsForMode(state.currentMode);
   if (!state.remaining) state.remaining = state.total;
-  if (state.page !== 'analytics') state.page = 'timer';
+  if (!['timer', 'analytics', 'leaderboard'].includes(state.page)) state.page = 'timer';
   if (state.pendingSession) state.running = false;
   state.remaining = clamp(Number(state.remaining) || state.total, 0, state.total || secondsForMode(state.currentMode));
   state.total = Math.max(1, Number(state.total) || secondsForMode(state.currentMode));
 
   els.timerPage.classList.toggle('active', state.page === 'timer');
+  if (els.analyticsPage) els.analyticsPage.classList.toggle('active', state.page === 'analytics');
+  if (els.leaderboardPage) els.leaderboardPage.classList.toggle('active', state.page === 'leaderboard');
   document.querySelectorAll('.drawer-item[data-page]').forEach(btn => btn.classList.toggle('active', btn.dataset.page === state.page));
-  els.analyticsPage.classList.toggle('active', state.page === 'analytics');
   document.querySelectorAll('.tab[data-analytics-view]').forEach(btn => btn.classList.toggle('active', btn.dataset.analyticsView === (state.analyticsView || 'weekly')));
 
   currentSubject = safeSubject(state.lastSubject);
