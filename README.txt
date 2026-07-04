@@ -1,6 +1,6 @@
 JEE Pomodoro Flow PWA
 
-This ZIP contains the full app:
+This ZIP contains the full app:.
 - index.html
 - style.css
 - app.js
