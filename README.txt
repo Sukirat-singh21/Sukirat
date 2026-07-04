@@ -6,7 +6,7 @@ This ZIP contains the full app:.
 - app.js
 - manifest.json
 - service-worker.js
-- icon-192.png
+- icon-192.png.
 - icon-512.png
 
 Main features:
