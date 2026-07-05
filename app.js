@@ -23,6 +23,7 @@ const els = {
   leaderboardCount: $('leaderboardCount'),
   leaderboardPodium: $('leaderboardPodium'),
   leaderboardPage: $('leaderboardPage'),
+  achievementsPage: $('achievementsPage'),
   drawer: $('drawer'),
   drawerBackdrop: $('drawerBackdrop'),
   closeDrawerBtn: $('closeDrawerBtn'),
@@ -75,6 +76,10 @@ const els = {
   achMadeBy: $('achMadeBy'),
   achJee: $('achJee'),
   achEnayat: $('achEnayat'),
+  achUnlockedCount: $('achUnlockedCount'),
+  achEnayatFill: $('achEnayatFill'),
+  achEnayatLabel: $('achEnayatLabel'),
+  achEnayatBadge: $('achEnayatBadge'),
 };
 
 const defaultState = {
@@ -650,7 +655,7 @@ function normalizeState(nextState) {
   const normalized = { ...cloneDefaultState(), ...(nextState && typeof nextState === 'object' ? nextState : {}) };
   normalized.currentMode = ['focus', 'short', 'long'].includes(normalized.currentMode) ? normalized.currentMode : 'focus';
   normalized.analyticsView = normalized.analyticsView === 'monthly' ? 'monthly' : 'weekly';
-  normalized.page = ['timer', 'analytics', 'leaderboard'].includes(normalized.page) ? normalized.page : 'timer';
+  normalized.page = ['timer', 'analytics', 'leaderboard', 'achievements'].includes(normalized.page) ? normalized.page : 'timer';
   normalized.lastSubject = safeSubject(normalized.lastSubject);
   normalized.analyticsSelections = {
     weekly: Number.isFinite(normalized.analyticsSelections?.weekly) ? normalized.analyticsSelections.weekly : -1,
@@ -759,10 +764,11 @@ function closeDrawer() {
   els.drawerBackdrop.classList.add('hidden');
 }
 function setPage(page) {
-  state.page = ['timer', 'analytics', 'leaderboard'].includes(page) ? page : 'timer';
+  state.page = ['timer', 'analytics', 'leaderboard', 'achievements'].includes(page) ? page : 'timer';
   els.timerPage.classList.toggle('active', state.page === 'timer');
   if (els.analyticsPage) els.analyticsPage.classList.toggle('active', state.page === 'analytics');
   if (els.leaderboardPage) els.leaderboardPage.classList.toggle('active', state.page === 'leaderboard');
+  if (els.achievementsPage) els.achievementsPage.classList.toggle('active', state.page === 'achievements');
   document.querySelectorAll('.drawer-item[data-page]').forEach(btn => btn.classList.toggle('active', btn.dataset.page === state.page));
   saveState();
   closeDrawer();
@@ -791,12 +797,9 @@ function updateTodaySummary() {
   const todayQuestions = questions;
   const enayatUnlocked = todayQuestions >= 100;
   state.achievements.enayat = enayatUnlocked;
-  els.achEnayat.classList.toggle('unlocked', enayatUnlocked);
-  els.achEnayat.classList.toggle('locked', !enayatUnlocked);
-  if (enayatUnlocked) els.achEnayat.textContent = "Enayat's Challenge";
-  else els.achEnayat.textContent = "Enayat's Challenge";
 
   state.streak = computeCurrentStreak(getRecords());
+  renderAchievements();
 }
 function addRecord({subject, questions, note, minutes, date}) {
   const safeQuestions = Math.max(0, Number.parseInt(questions, 10) || 0);
@@ -850,8 +853,7 @@ function updateAchievements() {
   const todayQuestions = todayRecs.reduce((a, r) => a + (Number(r.questions) || 0), 0);
   const enayatUnlocked = todayQuestions >= 100;
   state.achievements.enayat = enayatUnlocked;
-  els.achEnayat.classList.toggle('unlocked', enayatUnlocked);
-  els.achEnayat.classList.toggle('locked', !enayatUnlocked);
+  renderAchievements();
 }
 function buildWeeklyBuckets() {
   const recs = getRecords().filter(r => {
@@ -959,7 +961,7 @@ function render(options = {}) {
   renderTimerOnly();
   if (state.page === 'analytics') renderAnalytics();
   else if (state.page === 'leaderboard') renderLeaderboard();
-  else renderAchievements();
+  else if (state.page === 'achievements') renderAchievements();
   if (!options.skipSave) saveState();
 }
 function requestWakeLock() {
@@ -1426,23 +1428,30 @@ function handleTitleTap() {
   }
 }
 function maybeUnlockHiddenEggs() {
-  const today = dkey(new Date());
-  const todayQuestions = getRecords().filter(r => r.date === today).reduce((a, r) => a + (Number(r.questions) || 0), 0);
-  if (todayQuestions >= 100) {
-    els.achEnayat.textContent = "Enayat's Challenge";
-    els.achEnayat.classList.add('unlocked');
-  }
+  renderAchievements();
 }
 function renderAchievements() {
-  els.achMadeBy.textContent = 'Made by Sukirat';
-  els.achJee.textContent = 'JEE mode: on';
-  els.achMadeBy.classList.add('unlocked');
-  els.achJee.classList.add('unlocked');
   const todayQuestions = getRecords().filter(r => r.date === dkey(new Date())).reduce((a, r) => a + (Number(r.questions) || 0), 0);
   const unlocked = todayQuestions >= 100;
-  els.achEnayat.textContent = unlocked ? "Enayat's Challenge" : "Enayat's Challenge (100 q/day)";
-  els.achEnayat.classList.toggle('unlocked', unlocked);
-  els.achEnayat.classList.toggle('locked', !unlocked);
+  const pct = Math.min(100, Math.round((todayQuestions / 100) * 100));
+
+  // Update the full-page achievement item
+  if (els.achEnayat) {
+    els.achEnayat.classList.toggle('ach-unlocked', unlocked);
+    els.achEnayat.classList.toggle('ach-locked', !unlocked);
+  }
+  if (els.achEnayatFill) {
+    els.achEnayatFill.style.width = `${pct}%`;
+  }
+  if (els.achEnayatLabel) {
+    els.achEnayatLabel.textContent = `${todayQuestions} / 100 q`;
+  }
+  if (els.achEnayatBadge) {
+    els.achEnayatBadge.textContent = unlocked ? '🏆' : '🔒';
+  }
+  if (els.achUnlockedCount) {
+    els.achUnlockedCount.textContent = unlocked ? '1' : '0';
+  }
 }
 
 function renderLeaderboard() {
@@ -1633,7 +1642,7 @@ function init() {
   sanitizeNumbers();
   if (!state.total) state.total = secondsForMode(state.currentMode);
   if (!state.remaining) state.remaining = state.total;
-  if (!['timer', 'analytics', 'leaderboard'].includes(state.page)) state.page = 'timer';
+  if (!['timer', 'analytics', 'leaderboard', 'achievements'].includes(state.page)) state.page = 'timer';
   if (state.pendingSession) state.running = false;
   state.remaining = clamp(Number(state.remaining) || state.total, 0, state.total || secondsForMode(state.currentMode));
   state.total = Math.max(1, Number(state.total) || secondsForMode(state.currentMode));
@@ -1641,6 +1650,7 @@ function init() {
   els.timerPage.classList.toggle('active', state.page === 'timer');
   if (els.analyticsPage) els.analyticsPage.classList.toggle('active', state.page === 'analytics');
   if (els.leaderboardPage) els.leaderboardPage.classList.toggle('active', state.page === 'leaderboard');
+  if (els.achievementsPage) els.achievementsPage.classList.toggle('active', state.page === 'achievements');
   document.querySelectorAll('.drawer-item[data-page]').forEach(btn => btn.classList.toggle('active', btn.dataset.page === state.page));
   document.querySelectorAll('.tab[data-analytics-view]').forEach(btn => btn.classList.toggle('active', btn.dataset.analyticsView === (state.analyticsView || 'weekly')));
 
