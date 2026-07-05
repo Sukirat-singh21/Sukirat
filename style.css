@@ -433,6 +433,24 @@ button:focus-visible,input:focus-visible,[role="button"]:focus-visible{outline:2
   gap: 14px;
 }
 
+.achievements-info-card .mini-line {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+  align-items: start;
+  justify-content: start;
+}
+
+.achievements-info-card .mini-line span,
+.achievements-info-card .mini-line strong {
+  text-align: left;
+}
+
+.achievements-info-card .mini-line strong {
+  white-space: normal;
+  line-height: 1.45;
+}
+
 .ach-list {
   display: grid;
   gap: 14px;
