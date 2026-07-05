@@ -10,7 +10,7 @@ This ZIP contains the full app:.
 - icon-512.png
 
 Main features:
-- Pomodoro timer
+- Pomodoro timer.
 - Manual subject + question logging
 - Weekly analytics generated dynamically from stored sessions
 - Monthly analytics grouped by week
