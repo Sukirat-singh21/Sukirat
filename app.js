@@ -1,7 +1,8 @@
 const $ = (id) => document.getElementById(id);
 const CIRC = 515.22;
 const SUBJECTS = ['Physics', 'Chemistry', 'Maths'];
-const STORAGE_KEY = 'jee_pomodoro_flow_v4';
+const STORAGE_KEY = 'jee_pomodoro_flow_v5';
+const LEGACY_STORAGE_KEYS = ['jee_pomodoro_flow_v4'];
 const PROFILE_KEY = 'jee_pomodoro_flow_v4_profile';
 const DAY_MS = 86400000;
 const CLOUD_SYNC_ENABLED = true;
@@ -24,6 +25,18 @@ const els = {
   leaderboardPodium: $('leaderboardPodium'),
   leaderboardPage: $('leaderboardPage'),
   achievementsPage: $('achievementsPage'),
+  settingsPage: $('settingsPage'),
+  settingsFocusInput: $('settingsFocusInput'),
+  settingsShortBreakInput: $('settingsShortBreakInput'),
+  settingsLongBreakInput: $('settingsLongBreakInput'),
+  settingsRoundsInput: $('settingsRoundsInput'),
+  settingsNoBreakInput: $('settingsNoBreakInput'),
+  settingsAutoStartInput: $('settingsAutoStartInput'),
+  settingsSoundInput: $('settingsSoundInput'),
+  settingsPulseInput: $('settingsPulseInput'),
+  settingsResetBtn: $('settingsResetBtn'),
+  sessionModalDescription: $('sessionModalDescription'),
+  sessionDuration: $('sessionDuration'),
   drawer: $('drawer'),
   drawerBackdrop: $('drawerBackdrop'),
   closeDrawerBtn: $('closeDrawerBtn'),
@@ -90,6 +103,7 @@ const defaultState = {
   autoStart: false,
   sound: true,
   pulse: true,
+  noBreakMode: false,
   currentMode: 'focus',
   cycleCount: 1,
   running: false,
@@ -136,7 +150,13 @@ let profileHydrationStarted = false;
 
 function loadState() {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    let raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) {
+      for (const key of LEGACY_STORAGE_KEYS) {
+        raw = localStorage.getItem(key);
+        if (raw) break;
+      }
+    }
     if (!raw) return cloneDefaultState();
     const parsed = JSON.parse(raw);
     cloudLastAppliedAt = Number(parsed.updatedAt || 0) || 0;
@@ -655,13 +675,14 @@ function normalizeState(nextState) {
   const normalized = { ...cloneDefaultState(), ...(nextState && typeof nextState === 'object' ? nextState : {}) };
   normalized.currentMode = ['focus', 'short', 'long'].includes(normalized.currentMode) ? normalized.currentMode : 'focus';
   normalized.analyticsView = normalized.analyticsView === 'monthly' ? 'monthly' : 'weekly';
-  normalized.page = ['timer', 'analytics', 'leaderboard', 'achievements'].includes(normalized.page) ? normalized.page : 'timer';
+  normalized.page = ['timer', 'analytics', 'settings', 'leaderboard', 'achievements'].includes(normalized.page) ? normalized.page : 'timer';
   normalized.lastSubject = safeSubject(normalized.lastSubject);
   normalized.analyticsSelections = {
     weekly: Number.isFinite(normalized.analyticsSelections?.weekly) ? normalized.analyticsSelections.weekly : -1,
     monthly: Number.isFinite(normalized.analyticsSelections?.monthly) ? normalized.analyticsSelections.monthly : -1
   };
   normalized.achievements = { ...cloneDefaultState().achievements, ...(normalized.achievements || {}) };
+  normalized.noBreakMode = Boolean(normalized.noBreakMode);
   normalized.profile = normalizeProfile(normalized.profile || loadProfile());
   const seenRecordIds = new Set();
   normalized.records = Array.isArray(normalized.records)
@@ -683,12 +704,14 @@ function normalizeState(nextState) {
 
 function normalizePendingSession(session) {
   if (!session || typeof session !== 'object') return null;
-  return {
-    minutes: Math.max(1, Math.min(24 * 60, Math.round(Number(session.minutes) || 25))),
-    nextMode: ['short', 'long'].includes(session.nextMode) ? session.nextMode : 'short',
-    sessionDate: isDateKey(session.sessionDate) ? session.sessionDate : dkey(new Date()),
-    roundCompleted: Math.max(1, Number.parseInt(session.roundCompleted, 10) || 1)
-  };
+  return createPendingSession({
+    minutes: session.minutes,
+    nextMode: session.nextMode,
+    sessionDate: session.sessionDate,
+    roundCompleted: session.roundCompleted,
+    wasNoBreak: session.wasNoBreak,
+    restoreState: session.restoreState
+  });
 }
 
 function normalizeTimerCheckpoint(checkpoint) {
@@ -700,6 +723,64 @@ function normalizeTimerCheckpoint(checkpoint) {
     mode: ['focus', 'short', 'long'].includes(checkpoint.mode) ? checkpoint.mode : 'focus',
     cycleCount: Math.max(1, Number.parseInt(checkpoint.cycleCount, 10) || 1)
   };
+}
+
+function normalizeTimerSnapshot(snapshot) {
+  if (!snapshot || typeof snapshot !== 'object') return null;
+  return {
+    currentMode: ['focus', 'short', 'long'].includes(snapshot.currentMode) ? snapshot.currentMode : 'focus',
+    remaining: Math.max(0, Number(snapshot.remaining) || 0),
+    total: Math.max(1, Number(snapshot.total) || 1),
+    cycleCount: Math.max(1, Number.parseInt(snapshot.cycleCount, 10) || 1),
+    running: Boolean(snapshot.running)
+  };
+}
+
+function createTimerSnapshot() {
+  return normalizeTimerSnapshot({
+    currentMode: state.currentMode,
+    remaining: state.remaining,
+    total: state.total,
+    cycleCount: state.cycleCount,
+    running: state.running
+  });
+}
+
+function createPendingSession(base = {}) {
+  return {
+    minutes: Math.max(1, Math.min(24 * 60, Math.round(Number(base.minutes) || state.focus))),
+    nextMode: ['short', 'long'].includes(base.nextMode) ? base.nextMode : 'short',
+    sessionDate: isDateKey(base.sessionDate) ? base.sessionDate : dkey(new Date()),
+    roundCompleted: Math.max(1, Number.parseInt(base.roundCompleted, 10) || 1),
+    wasNoBreak: Boolean(base.wasNoBreak),
+    restoreState: normalizeTimerSnapshot(base.restoreState || createTimerSnapshot())
+  };
+}
+
+function restorePendingSessionState(options = {}) {
+  const pending = state.pendingSession;
+  if (!pending) return false;
+  const snapshot = normalizeTimerSnapshot(options.snapshot || pending.restoreState);
+  state.pendingSession = null;
+  closeSessionModal();
+  if (snapshot) {
+    state.currentMode = snapshot.currentMode;
+    state.remaining = snapshot.remaining;
+    state.total = snapshot.total;
+    state.cycleCount = snapshot.cycleCount;
+    state.running = false;
+    timerPerfStamp = 0;
+    state.timerCheckpoint = null;
+    clearInterval(interval);
+    interval = null;
+    releaseWakeLock();
+    if (state.currentMode === 'focus') {
+      els.statusPill.textContent = 'Ready to lock in';
+    } else {
+      els.statusPill.textContent = 'Break ready';
+    }
+  }
+  return true;
 }
 
 function getRecords() { return Array.isArray(state.records) ? state.records : []; }
@@ -735,7 +816,8 @@ function advanceCycleAfterFocus(round = state.cycleCount) {
   state.cycleCount = round % state.roundsBeforeLong === 0 ? 1 : round + 1;
 }
 function modeName(mode) {
-  return mode === 'focus' ? 'Focus' : mode === 'short' ? 'Short break' : 'Long break';
+  if (mode === 'focus') return state.noBreakMode ? 'Continuous focus' : 'Focus';
+  return mode === 'short' ? 'Short break' : 'Long break';
 }
 function subjectColorClass(subject) {
   return subject === 'Physics' ? 'phy' : subject === 'Chemistry' ? 'chem' : 'math';
@@ -764,9 +846,10 @@ function closeDrawer() {
   els.drawerBackdrop.classList.add('hidden');
 }
 function setPage(page) {
-  state.page = ['timer', 'analytics', 'leaderboard', 'achievements'].includes(page) ? page : 'timer';
+  state.page = ['timer', 'analytics', 'settings', 'leaderboard', 'achievements'].includes(page) ? page : 'timer';
   els.timerPage.classList.toggle('active', state.page === 'timer');
   if (els.analyticsPage) els.analyticsPage.classList.toggle('active', state.page === 'analytics');
+  if (els.settingsPage) els.settingsPage.classList.toggle('active', state.page === 'settings');
   if (els.leaderboardPage) els.leaderboardPage.classList.toggle('active', state.page === 'leaderboard');
   if (els.achievementsPage) els.achievementsPage.classList.toggle('active', state.page === 'achievements');
   document.querySelectorAll('.drawer-item[data-page]').forEach(btn => btn.classList.toggle('active', btn.dataset.page === state.page));
@@ -940,7 +1023,7 @@ function render(options = {}) {
   els.timer.textContent = fmt(state.remaining);
   els.modeLabel.textContent = modeName(state.currentMode);
   els.sessionMini.textContent = state.currentMode === 'focus'
-    ? `Round ${state.cycleCount} of ${state.roundsBeforeLong}`
+    ? (state.noBreakMode ? `Cycle ${state.cycleCount}` : `Round ${state.cycleCount} of ${state.roundsBeforeLong}`)
     : modeName(state.currentMode);
   els.startPauseBtn.textContent = running ? 'Pause' : 'Start';
   const logAllowed = Boolean(state.pendingSession || state.currentMode === 'focus');
@@ -949,8 +1032,9 @@ function render(options = {}) {
   els.logBtn.title = logAllowed ? '' : 'Log Session is only available during a focus round';
   els.statusPill.textContent = running ? 'Locked in' : (
     state.pendingSession ? 'Log session' :
-    (state.currentMode !== 'focus' && state.remaining === state.total ? 'Break ready' :
-      (state.remaining === state.total ? 'Ready to lock in' : 'Paused'))
+    (state.noBreakMode && state.currentMode === 'focus' ? 'Continuous study' :
+      (state.currentMode !== 'focus' && state.remaining === state.total ? 'Break ready' :
+        (state.remaining === state.total ? 'Ready to lock in' : 'Paused')))
   );
   const pct = 1 - (state.remaining / state.total || 1);
   els.progressRing.style.strokeDashoffset = String(CIRC * (1 - clamp(pct, 0, 1)));
@@ -960,6 +1044,7 @@ function render(options = {}) {
   updateStats();
   renderTimerOnly();
   if (state.page === 'analytics') renderAnalytics();
+  else if (state.page === 'settings') renderSettings();
   else if (state.page === 'leaderboard') renderLeaderboard();
   else if (state.page === 'achievements') renderAchievements();
   if (!options.skipSave) saveState();
@@ -1038,16 +1123,40 @@ function completeTimerCycle() {
   state.running = false;
   timerPerfStamp = 0;
   state.timerCheckpoint = null;
+
+  if (finishedMode === 'focus' && state.noBreakMode) {
+    state.cycleCount = Math.max(1, Number(state.cycleCount) || 1) + 1;
+    state.currentMode = 'focus';
+    state.total = secondsForMode('focus');
+    state.remaining = state.total;
+    state.running = true;
+    timerPerfStamp = performance.now();
+    requestWakeLock();
+    interval = setInterval(tick, 1000);
+    saveState({ immediate: true, reason: 'no-break-cycle' });
+    render({ skipSave: true });
+    return;
+  }
+
   releaseWakeLock();
 
   if (finishedMode === 'focus') {
     const completedRound = state.cycleCount;
-    state.pendingSession = {
+    const nextMode = nextBreakModeForRound(completedRound);
+    state.pendingSession = createPendingSession({
       minutes: state.focus,
-      nextMode: nextBreakModeForRound(completedRound),
+      nextMode,
       sessionDate: dkey(new Date()),
-      roundCompleted: completedRound
-    };
+      roundCompleted: completedRound,
+      wasNoBreak: false,
+      restoreState: {
+        currentMode: nextMode,
+        remaining: secondsForMode(nextMode),
+        total: secondsForMode(nextMode),
+        cycleCount: completedRound,
+        running: false
+      }
+    });
     state.currentMode = state.pendingSession.nextMode;
     state.total = secondsForMode(state.currentMode);
     state.remaining = state.total;
@@ -1058,7 +1167,6 @@ function completeTimerCycle() {
     state.currentMode = 'focus';
     state.remaining = secondsForMode('focus');
     state.total = state.remaining;
-    releaseWakeLock();
     render();
     saveState();
     if (state.autoStart) setTimeout(() => startTimer(), 450);
@@ -1124,11 +1232,30 @@ function openSessionModal() {
     btn.classList.toggle('active', active);
     btn.setAttribute('aria-pressed', String(active));
   });
+  if (els.sessionModalDescription) {
+    els.sessionModalDescription.textContent = state.noBreakMode
+      ? 'Pick a subject and enter the questions solved for this continuous study block.'
+      : 'Pick a subject and enter the questions solved.';
+  }
+  if (els.sessionDuration) {
+    const duration = state.pendingSession && Number(state.pendingSession.minutes) > 0
+      ? Number(state.pendingSession.minutes)
+      : (state.noBreakMode ? getContinuousSessionMinutes() : state.focus);
+    els.sessionDuration.textContent = minutesToHuman(Math.max(1, Math.round(duration)));
+  }
   els.questionInput.focus();
 }
 function closeSessionModal() {
   els.sessionModal.classList.add('hidden');
   els.sessionModal.setAttribute('aria-hidden', 'true');
+}
+function getContinuousSessionMinutes() {
+  const focusSeconds = Math.max(60, secondsForMode('focus'));
+  const completedCycles = Math.max(0, Math.round(Number(state.cycleCount) || 1) - 1);
+  const currentSeconds = state.currentMode === 'focus'
+    ? Math.max(0, focusSeconds - Math.max(0, Number(state.remaining) || 0))
+    : 0;
+  return Math.max(1, Math.round((completedCycles * focusSeconds + currentSeconds) / 60));
 }
 function savePendingSession() {
   if (!state.pendingSession || savingSession) return;
@@ -1137,18 +1264,20 @@ function savePendingSession() {
   const questions = Math.max(0, Number.parseInt(els.questionInput.value, 10) || 0);
   const note = els.noteInput.value || '';
   const subject = currentSubject || 'Physics';
+  const isContinuous = Boolean(state.pendingSession.wasNoBreak);
   let saved = false;
 
   try {
     const completedRound = state.pendingSession.roundCompleted || state.cycleCount;
+    const recordedMinutes = Math.max(1, Number(state.pendingSession.minutes) || state.focus);
     addRecord({
       subject,
       questions,
       note,
-      minutes: state.pendingSession.minutes || state.focus,
+      minutes: recordedMinutes,
       date: state.pendingSession.sessionDate || dkey(new Date())
     });
-    advanceCycleAfterFocus(completedRound);
+    if (!isContinuous) advanceCycleAfterFocus(completedRound);
     saved = true;
     showToast(subject === 'Physics' ? 'Physics logged' : `${subject} saved`);
   } catch (err) {
@@ -1157,30 +1286,38 @@ function savePendingSession() {
   } finally {
     savingSession = false;
     els.saveLogBtn.disabled = false;
-    if (saved) {
-      const nextMode = state.pendingSession.nextMode || 'short';
-      state.pendingSession = null;
-      closeSessionModal();
-      state.currentMode = nextMode;
-      state.total = secondsForMode(nextMode);
-      state.remaining = state.total;
-      state.lastSubject = subject;
-      state.running = false;
-      timerPerfStamp = 0;
-      state.timerCheckpoint = null;
-      clearInterval(interval);
-      interval = null;
-      saveState({ immediate: true, reason: 'session-saved' });
-      render();
-      void syncLeaderboardNow('session-saved');
-      void refreshLeaderboard();
-      if (state.autoStart) setTimeout(() => startTimer(), 300);
-      else els.statusPill.textContent = 'Break ready';
+  }
+
+  if (saved) {
+    state.pendingSession = null;
+    closeSessionModal();
+    state.lastSubject = subject;
+    state.currentMode = 'focus';
+    state.total = secondsForMode('focus');
+    state.remaining = state.total;
+    state.running = false;
+    timerPerfStamp = 0;
+    state.timerCheckpoint = null;
+    clearInterval(interval);
+    interval = null;
+    releaseWakeLock();
+    if (isContinuous) {
+      state.cycleCount = 1;
     }
+    saveState({ immediate: true, reason: 'session-saved' });
+    render();
+    void syncLeaderboardNow('session-saved');
+    void refreshLeaderboard();
+    if (!isContinuous && state.autoStart) setTimeout(() => startTimer(), 300);
+    else if (!isContinuous) els.statusPill.textContent = 'Break ready';
   }
 }
 function dismissSessionModal() {
-  closeSessionModal();
+  if (state.pendingSession) {
+    restorePendingSessionState();
+  } else {
+    closeSessionModal();
+  }
   render();
 }
 function getAnalyticsIndex(view, bucketCount) {
@@ -1623,10 +1760,72 @@ function setAnalyticsView(view) {
   renderAnalytics();
 }
 function sanitizeNumbers() {
-  state.focus = Math.max(10, Math.min(90, Number(state.focus) || 25));
-  state.shortBreak = Math.max(3, Math.min(30, Number(state.shortBreak) || 5));
-  state.longBreak = Math.max(5, Math.min(45, Number(state.longBreak) || 15));
-  state.roundsBeforeLong = Math.max(2, Math.min(8, Number(state.roundsBeforeLong) || 4));
+  state.focus = Math.max(1, Math.min(60, Number.isFinite(Number(state.focus)) ? Number(state.focus) : 25));
+  state.shortBreak = Math.max(1, Math.min(30, Number.isFinite(Number(state.shortBreak)) ? Number(state.shortBreak) : 5));
+  state.longBreak = Math.max(1, Math.min(45, Number.isFinite(Number(state.longBreak)) ? Number(state.longBreak) : 15));
+  state.roundsBeforeLong = Math.max(2, Math.min(8, Number.isFinite(Number(state.roundsBeforeLong)) ? Number(state.roundsBeforeLong) : 4));
+  state.noBreakMode = Boolean(state.noBreakMode);
+}
+function renderSettings() {
+  if (!els.settingsPage) return;
+  if (els.settingsFocusInput) els.settingsFocusInput.value = String(state.focus);
+  if (els.settingsShortBreakInput) els.settingsShortBreakInput.value = String(state.shortBreak);
+  if (els.settingsLongBreakInput) els.settingsLongBreakInput.value = String(state.longBreak);
+  if (els.settingsRoundsInput) els.settingsRoundsInput.value = String(state.roundsBeforeLong);
+  if (els.settingsNoBreakInput) els.settingsNoBreakInput.checked = Boolean(state.noBreakMode);
+  if (els.settingsAutoStartInput) els.settingsAutoStartInput.checked = Boolean(state.autoStart);
+  if (els.settingsSoundInput) els.settingsSoundInput.checked = Boolean(state.sound);
+  if (els.settingsPulseInput) els.settingsPulseInput.checked = Boolean(state.pulse);
+}
+function applySettingsFromUI() {
+  if (!els.settingsPage) return;
+  const parsedFocus = Number.parseInt(els.settingsFocusInput?.value, 10);
+  const parsedShort = Number.parseInt(els.settingsShortBreakInput?.value, 10);
+  const parsedLong = Number.parseInt(els.settingsLongBreakInput?.value, 10);
+  const parsedRounds = Number.parseInt(els.settingsRoundsInput?.value, 10);
+  const next = {
+    focus: Number.isFinite(parsedFocus) && parsedFocus >= 1 && parsedFocus <= 60 ? parsedFocus : state.focus,
+    shortBreak: Number.isFinite(parsedShort) && parsedShort >= 1 && parsedShort <= 30 ? parsedShort : state.shortBreak,
+    longBreak: Number.isFinite(parsedLong) && parsedLong >= 1 && parsedLong <= 45 ? parsedLong : state.longBreak,
+    roundsBeforeLong: Number.isFinite(parsedRounds) && parsedRounds >= 2 && parsedRounds <= 8 ? parsedRounds : state.roundsBeforeLong,
+    noBreakMode: Boolean(els.settingsNoBreakInput?.checked),
+    autoStart: Boolean(els.settingsAutoStartInput?.checked),
+    sound: Boolean(els.settingsSoundInput?.checked),
+    pulse: Boolean(els.settingsPulseInput?.checked)
+  };
+  const wasRunning = state.running;
+  state.focus = next.focus;
+  state.shortBreak = next.shortBreak;
+  state.longBreak = next.longBreak;
+  state.roundsBeforeLong = next.roundsBeforeLong;
+  state.noBreakMode = next.noBreakMode;
+  state.autoStart = next.autoStart;
+  state.sound = next.sound;
+  state.pulse = next.pulse;
+  if (!wasRunning && !state.pendingSession) {
+    state.total = secondsForMode(state.currentMode);
+    state.remaining = state.total;
+  }
+  saveState({ immediate: true, reason: 'settings-updated' });
+  render({ skipSave: true });
+}
+function resetSettingsToDefaults() {
+  state.focus = 25;
+  state.shortBreak = 5;
+  state.longBreak = 15;
+  state.roundsBeforeLong = 4;
+  state.noBreakMode = false;
+  state.autoStart = false;
+  state.sound = true;
+  state.pulse = true;
+  if (!state.running && !state.pendingSession) {
+    state.currentMode = 'focus';
+    state.total = secondsForMode('focus');
+    state.remaining = state.total;
+  }
+  saveState({ immediate: true, reason: 'settings-reset' });
+  render({ skipSave: true });
+  showToast('Settings reset');
 }
 
 cloudClientId = getCloudClientId();
@@ -1642,13 +1841,14 @@ function init() {
   sanitizeNumbers();
   if (!state.total) state.total = secondsForMode(state.currentMode);
   if (!state.remaining) state.remaining = state.total;
-  if (!['timer', 'analytics', 'leaderboard', 'achievements'].includes(state.page)) state.page = 'timer';
+  if (!['timer', 'analytics', 'settings', 'leaderboard', 'achievements'].includes(state.page)) state.page = 'timer';
   if (state.pendingSession) state.running = false;
   state.remaining = clamp(Number(state.remaining) || state.total, 0, state.total || secondsForMode(state.currentMode));
   state.total = Math.max(1, Number(state.total) || secondsForMode(state.currentMode));
 
   els.timerPage.classList.toggle('active', state.page === 'timer');
   if (els.analyticsPage) els.analyticsPage.classList.toggle('active', state.page === 'analytics');
+  if (els.settingsPage) els.settingsPage.classList.toggle('active', state.page === 'settings');
   if (els.leaderboardPage) els.leaderboardPage.classList.toggle('active', state.page === 'leaderboard');
   if (els.achievementsPage) els.achievementsPage.classList.toggle('active', state.page === 'achievements');
   document.querySelectorAll('.drawer-item[data-page]').forEach(btn => btn.classList.toggle('active', btn.dataset.page === state.page));
@@ -1777,24 +1977,24 @@ els.startPauseBtn.addEventListener('click', () => {
 els.skipBtn.addEventListener('click', () => {
   if (state.running) pauseTimer();
   if (state.pendingSession) {
-    advanceCycleAfterFocus(state.pendingSession.roundCompleted || state.cycleCount);
-    state.pendingSession = null;
-    closeSessionModal();
-    state.currentMode = 'focus';
-    state.remaining = state.focus * 60;
-    state.total = state.remaining;
-    timerPerfStamp = 0;
-    state.timerCheckpoint = null;
+    restorePendingSessionState();
     render();
     return;
   }
   if (state.currentMode === 'focus') {
     const completedRound = state.cycleCount;
-    const nextMode = nextBreakModeForRound(completedRound);
-    state.currentMode = nextMode;
-    state.remaining = secondsForMode(state.currentMode);
-    state.total = state.remaining;
-    advanceCycleAfterFocus(completedRound);
+    if (state.noBreakMode) {
+      state.cycleCount = Math.max(1, Number(state.cycleCount) || 1) + 1;
+      state.currentMode = 'focus';
+      state.remaining = secondsForMode('focus');
+      state.total = state.remaining;
+    } else {
+      const nextMode = nextBreakModeForRound(completedRound);
+      state.currentMode = nextMode;
+      state.remaining = secondsForMode(state.currentMode);
+      state.total = state.remaining;
+      advanceCycleAfterFocus(completedRound);
+    }
   } else {
     state.currentMode = 'focus';
     state.remaining = secondsForMode('focus');
@@ -1820,6 +2020,21 @@ els.logBtn.addEventListener('click', () => {
     openSessionModal();
     return;
   }
+  if (state.noBreakMode) {
+    if (state.running) pauseTimer();
+    const restoreState = createTimerSnapshot();
+    state.pendingSession = createPendingSession({
+      minutes: getContinuousSessionMinutes(),
+      nextMode: 'focus',
+      sessionDate: dkey(new Date()),
+      roundCompleted: Math.max(1, Number(state.cycleCount) || 1),
+      wasNoBreak: true,
+      restoreState
+    });
+    openSessionModal();
+    render();
+    return;
+  }
   if (state.currentMode !== 'focus') {
     showToast('Finish your break first, then log the focus session');
     return;
@@ -1829,12 +2044,21 @@ els.logBtn.addEventListener('click', () => {
     ? Math.max(1, Math.round((state.total - state.remaining) / 60))
     : state.focus;
   if (state.running) pauseTimer();
-  state.pendingSession = {
+  const nextMode = nextBreakModeForRound(completedRound);
+  state.pendingSession = createPendingSession({
     minutes: elapsedFocusMinutes,
-    nextMode: nextBreakModeForRound(completedRound),
+    nextMode,
     sessionDate: dkey(new Date()),
-    roundCompleted: completedRound
-  };
+    roundCompleted: completedRound,
+    wasNoBreak: false,
+    restoreState: {
+      currentMode: nextMode,
+      remaining: secondsForMode(nextMode),
+      total: secondsForMode(nextMode),
+      cycleCount: completedRound,
+      running: false
+    }
+  });
   state.currentMode = state.pendingSession.nextMode;
   state.total = secondsForMode(state.currentMode);
   state.remaining = state.total;
@@ -1867,6 +2091,18 @@ els.subjectChips.forEach(btn => btn.addEventListener('click', () => {
 document.querySelectorAll('.tab[data-analytics-view]').forEach(btn => {
   btn.addEventListener('click', () => setAnalyticsView(btn.dataset.analyticsView));
 });
+if (els.settingsPage) {
+  [els.settingsFocusInput, els.settingsShortBreakInput, els.settingsLongBreakInput, els.settingsRoundsInput].forEach(input => {
+    if (!input) return;
+    input.addEventListener('change', applySettingsFromUI);
+    input.addEventListener('blur', applySettingsFromUI);
+  });
+  [els.settingsNoBreakInput, els.settingsAutoStartInput, els.settingsSoundInput, els.settingsPulseInput].forEach(input => {
+    if (!input) return;
+    input.addEventListener('change', applySettingsFromUI);
+  });
+  if (els.settingsResetBtn) els.settingsResetBtn.addEventListener('click', resetSettingsToDefaults);
+}
 if (els.closeAnalyticsSessionBtn) els.closeAnalyticsSessionBtn.addEventListener('click', closeAnalyticsSessionModal);
 if (els.closeAnalyticsSessionFooterBtn) els.closeAnalyticsSessionFooterBtn.addEventListener('click', closeAnalyticsSessionModal);
 if (els.deleteAnalyticsSessionBtn) els.deleteAnalyticsSessionBtn.addEventListener('click', handleAnalyticsSessionDelete);
@@ -1885,6 +2121,7 @@ function cleanupAndRefresh(options = {}) {
   updateStats();
   updateAchievements();
   if (state.page === 'analytics') renderAnalytics();
+  else if (state.page === 'settings') renderSettings();
   else renderTimerOnly();
   if (!options.skipSave) saveState();
 }

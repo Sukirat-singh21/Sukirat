@@ -132,6 +132,91 @@
 
       </section>
 
+      <section class="page" id="settingsPage">
+        <div class="card settings-header">
+          <div>
+            <div class="eyebrow">Settings</div>
+            <h2>Timer controls</h2>
+            <p>Set your focus length, tune breaks, and switch on continuous no-break study mode for long grind sessions.</p>
+          </div>
+          <div class="settings-summary">
+            <div class="mini-stat"><span>Focus</span><strong>1–60 min</strong></div>
+            <div class="mini-stat"><span>Mode</span><strong>Continuous / Pomodoro</strong></div>
+          </div>
+        </div>
+
+        <div class="card settings-card">
+          <div class="section-heading">
+            <h2>Timer settings</h2>
+            <span>Changes save automatically</span>
+          </div>
+
+          <div class="settings-grid">
+            <label class="setting-field">
+              <span>Pomodoro minutes</span>
+              <input id="settingsFocusInput" type="number" min="1" max="60" step="1" value="25" />
+              <small>0 is invalid. Keep it between 1 and 60.</small>
+            </label>
+
+            <label class="setting-field">
+              <span>Short break minutes</span>
+              <input id="settingsShortBreakInput" type="number" min="1" max="30" step="1" value="5" />
+              <small>Used only in normal Pomodoro mode.</small>
+            </label>
+
+            <label class="setting-field">
+              <span>Long break minutes</span>
+              <input id="settingsLongBreakInput" type="number" min="1" max="45" step="1" value="15" />
+              <small>Used after the longer round cycle.</small>
+            </label>
+
+            <label class="setting-field">
+              <span>Focus rounds before long break</span>
+              <input id="settingsRoundsInput" type="number" min="2" max="8" step="1" value="4" />
+              <small>Classic Pomodoro is 4 rounds.</small>
+            </label>
+          </div>
+
+          <div class="settings-toggles">
+            <label class="toggle-row">
+              <div>
+                <strong>No break mode</strong>
+                <span>Keep chaining focus cycles and log one continuous session when you stop.</span>
+              </div>
+              <input id="settingsNoBreakInput" type="checkbox" />
+            </label>
+
+            <label class="toggle-row">
+              <div>
+                <strong>Auto-start next cycle</strong>
+                <span>Kick off the next phase automatically after a session ends.</span>
+              </div>
+              <input id="settingsAutoStartInput" type="checkbox" />
+            </label>
+
+            <label class="toggle-row">
+              <div>
+                <strong>Sound cues</strong>
+                <span>Play a small alert when a cycle completes.</span>
+              </div>
+              <input id="settingsSoundInput" type="checkbox" />
+            </label>
+
+            <label class="toggle-row">
+              <div>
+                <strong>Pulse glow</strong>
+                <span>Keep the soft ambient glow while the timer runs.</span>
+              </div>
+              <input id="settingsPulseInput" type="checkbox" />
+            </label>
+          </div>
+
+          <div class="settings-actions">
+            <button class="soft" id="settingsResetBtn">Reset defaults</button>
+          </div>
+        </div>
+      </section>
+
       <section class="page" id="achievementsPage">
         <div class="card achievements-header">
           <div>
@@ -233,6 +318,7 @@
     </div>
     <button class="drawer-item active" data-page="timer">Timer</button>
     <button class="drawer-item" data-page="analytics">Analytics</button>
+    <button class="drawer-item" data-page="settings">Settings</button>
     <button class="drawer-item" data-page="leaderboard">Leaderboard</button>
     <button class="drawer-item" data-page="achievements">Achievements</button>
     <button class="drawer-item" id="backupBtn">Export backup</button>
@@ -254,6 +340,10 @@
           <p id="sessionModalDescription">Pick a subject and enter the questions solved.</p>
         </div>
         <button class="icon-btn small" id="closeModalBtn" aria-label="Close log session">✕</button>
+      </div>
+
+      <div class="mini-lines session-summary">
+        <div class="mini-line"><span>Session time</span><strong id="sessionDuration">25m</strong></div>
       </div>
 
       <div class="field">
