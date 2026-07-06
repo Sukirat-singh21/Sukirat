@@ -35,6 +35,10 @@ const els = {
   settingsSoundInput: $('settingsSoundInput'),
   settingsPulseInput: $('settingsPulseInput'),
   settingsResetBtn: $('settingsResetBtn'),
+  settingsFocusValue: $('settingsFocusValue'),
+  settingsShortBreakValue: $('settingsShortBreakValue'),
+  settingsLongBreakValue: $('settingsLongBreakValue'),
+  settingsRoundsValue: $('settingsRoundsValue'),
   sessionModalDescription: $('sessionModalDescription'),
   sessionDuration: $('sessionDuration'),
   drawer: $('drawer'),
@@ -180,7 +184,7 @@ function saveState(options = {}) {
   try {
     state.updatedAt = Date.now();
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    queueCloudSync(options);
+    if (!options.skipCloud) queueCloudSync(options);
     return true;
   } catch (error) {
     logCloud('error', 'Local storage save failed.', error);
@@ -1033,10 +1037,11 @@ function render(options = {}) {
     ? (state.noBreakMode ? `Cycle ${state.cycleCount}` : `Round ${state.cycleCount} of ${state.roundsBeforeLong}`)
     : modeName(state.currentMode);
   els.startPauseBtn.textContent = running ? 'Pause' : 'Start';
-  const logAllowed = Boolean(state.pendingSession || state.currentMode === 'focus');
+  const hasStartedFocus = state.currentMode === 'focus' && (state.running || state.remaining < state.total);
+  const logAllowed = Boolean(state.pendingSession || hasStartedFocus);
   els.logBtn.disabled = !logAllowed;
   els.logBtn.style.opacity = logAllowed ? '' : '0.38';
-  els.logBtn.title = logAllowed ? '' : 'Log Session is only available during a focus round';
+  els.logBtn.title = logAllowed ? '' : 'Start the focus timer before logging this session';
   els.statusPill.textContent = running ? 'Locked in' : (
     state.pendingSession ? 'Log session' :
     (state.noBreakMode && state.currentMode === 'focus' ? 'Continuous study' :
@@ -1244,6 +1249,10 @@ function playSound(soundType) {
         playTone(659,  0.10, 'sine', 0.15, 0.13);
         playTone(784,  0.10, 'sine', 0.15, 0.25);
         playTone(1047, 0.32, 'sine', 0.18, 0.37);
+        break;
+      case 'click':
+        // Tiny tap
+        playTone(880, 0.03, 'sine', 0.04);
         break;
       default: break;
     }
@@ -1842,6 +1851,36 @@ function sanitizeNumbers() {
   state.roundsBeforeLong = Math.max(2, Math.min(8, Number.isFinite(Number(state.roundsBeforeLong)) ? Number(state.roundsBeforeLong) : 4));
   state.noBreakMode = Boolean(state.noBreakMode);
 }
+
+function syncRangeFill(input) {
+  if (!input) return;
+  const min = Number(input.min ?? 0);
+  const max = Number(input.max ?? 100);
+  const value = clamp(Number(input.value) || min, min, max);
+  const pct = max > min ? ((value - min) / (max - min)) * 100 : 0;
+  input.style.setProperty('--range-fill', `${pct}%`);
+  input.setAttribute('aria-valuenow', String(value));
+  const targetId = input.dataset.valueTarget;
+  if (targetId) {
+    const target = $(targetId);
+    if (target) {
+      const unit = input.dataset.unit || 'min';
+      const labelMode = input.dataset.labelMode || 'unit';
+      const label = labelMode === 'count'
+        ? `${value} ${value === 1 ? (input.dataset.unitSingular || unit) : unit}`
+        : `${value} ${unit}`;
+      target.textContent = label;
+    }
+  }
+}
+
+function updateSettingsReadouts() {
+  syncRangeFill(els.settingsFocusInput);
+  syncRangeFill(els.settingsShortBreakInput);
+  syncRangeFill(els.settingsLongBreakInput);
+  syncRangeFill(els.settingsRoundsInput);
+}
+
 function renderSettings() {
   if (!els.settingsPage) return;
   if (els.settingsFocusInput) els.settingsFocusInput.value = String(state.focus);
@@ -1855,6 +1894,7 @@ function renderSettings() {
   document.querySelectorAll('.theme-card[data-theme]').forEach(card => {
     card.classList.toggle('active', card.dataset.theme === (state.theme || 'nebula'));
   });
+  updateSettingsReadouts();
 }
 function applySettingsFromUI() {
   if (!els.settingsPage) return;
@@ -2100,6 +2140,15 @@ els.logBtn.addEventListener('click', () => {
     openSessionModal();
     return;
   }
+  if (state.currentMode !== 'focus') {
+    showToast('Finish your break first, then log the focus session');
+    return;
+  }
+  const hasStarted = state.running || state.remaining < state.total;
+  if (!hasStarted) {
+    showToast('Start the timer before logging this session');
+    return;
+  }
   if (state.noBreakMode) {
     if (state.running) pauseTimer();
     const restoreState = createTimerSnapshot();
@@ -2113,10 +2162,6 @@ els.logBtn.addEventListener('click', () => {
     });
     openSessionModal();
     render();
-    return;
-  }
-  if (state.currentMode !== 'focus') {
-    showToast('Finish your break first, then log the focus session');
     return;
   }
   const completedRound = state.cycleCount;
@@ -2174,6 +2219,7 @@ document.querySelectorAll('.tab[data-analytics-view]').forEach(btn => {
 if (els.settingsPage) {
   [els.settingsFocusInput, els.settingsShortBreakInput, els.settingsLongBreakInput, els.settingsRoundsInput].forEach(input => {
     if (!input) return;
+    input.addEventListener('input', updateSettingsReadouts);
     input.addEventListener('change', applySettingsFromUI);
     input.addEventListener('blur', applySettingsFromUI);
   });
@@ -2183,20 +2229,21 @@ if (els.settingsPage) {
   });
   if (els.settingsResetBtn) els.settingsResetBtn.addEventListener('click', resetSettingsToDefaults);
 }
-if (els.closeAnalyticsSessionBtn) els.closeAnalyticsSessionBtn.addEventListener('click', closeAnalyticsSessionModal);
-if (els.closeAnalyticsSessionFooterBtn) els.closeAnalyticsSessionFooterBtn.addEventListener('click', closeAnalyticsSessionModal);
-if (els.deleteAnalyticsSessionBtn) els.deleteAnalyticsSessionBtn.addEventListener('click', handleAnalyticsSessionDelete);
-
 document.querySelectorAll('.theme-card[data-theme]').forEach(card => {
   card.addEventListener('click', () => {
     const t = card.dataset.theme;
-    if (t === state.theme) return;
+    if (!t || t === state.theme) return;
     applyTheme(t);
+    playSound('click');
     saveState({ immediate: true, reason: 'theme-changed' });
     const names = { nebula: 'Nebula 🌌', ocean: 'Ocean 🌊', ember: 'Ember 🔥' };
     showToast(`Theme: ${names[t] || t}`);
+    render({ skipSave: true });
   });
 });
+if (els.closeAnalyticsSessionBtn) els.closeAnalyticsSessionBtn.addEventListener('click', closeAnalyticsSessionModal);
+if (els.closeAnalyticsSessionFooterBtn) els.closeAnalyticsSessionFooterBtn.addEventListener('click', closeAnalyticsSessionModal);
+if (els.deleteAnalyticsSessionBtn) els.deleteAnalyticsSessionBtn.addEventListener('click', handleAnalyticsSessionDelete);
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
@@ -2246,5 +2293,5 @@ function tick() {
 
   saveTimerCheckpoint();
   renderTimerOnly();
-  saveState();
+  saveState({ skipCloud: true, reason: 'timer-progress' });
 }

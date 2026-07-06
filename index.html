@@ -185,25 +185,37 @@
           <div class="settings-grid">
             <label class="setting-field">
               <span>🎯 Pomodoro length</span>
-              <input id="settingsFocusInput" type="number" min="1" max="60" step="1" value="25" />
+              <div class="setting-slider-row">
+                <input id="settingsFocusInput" class="range-slider" type="range" min="1" max="60" step="1" value="25" data-value-target="settingsFocusValue" data-unit="min" />
+                <div class="setting-value" id="settingsFocusValue">25 min</div>
+              </div>
               <small>1–60 minutes per focus round.</small>
             </label>
 
             <label class="setting-field">
               <span>☕ Short break</span>
-              <input id="settingsShortBreakInput" type="number" min="1" max="30" step="1" value="5" />
+              <div class="setting-slider-row">
+                <input id="settingsShortBreakInput" class="range-slider" type="range" min="1" max="30" step="1" value="5" data-value-target="settingsShortBreakValue" data-unit="min" />
+                <div class="setting-value" id="settingsShortBreakValue">5 min</div>
+              </div>
               <small>Used in normal Pomodoro mode.</small>
             </label>
 
             <label class="setting-field">
               <span>🛋 Long break</span>
-              <input id="settingsLongBreakInput" type="number" min="1" max="45" step="1" value="15" />
+              <div class="setting-slider-row">
+                <input id="settingsLongBreakInput" class="range-slider" type="range" min="1" max="45" step="1" value="15" data-value-target="settingsLongBreakValue" data-unit="min" />
+                <div class="setting-value" id="settingsLongBreakValue">15 min</div>
+              </div>
               <small>After completing a full round set.</small>
             </label>
 
             <label class="setting-field">
               <span>🔁 Rounds before long break</span>
-              <input id="settingsRoundsInput" type="number" min="2" max="8" step="1" value="4" />
+              <div class="setting-slider-row">
+                <input id="settingsRoundsInput" class="range-slider" type="range" min="2" max="8" step="1" value="4" data-value-target="settingsRoundsValue" data-unit="rounds" data-unit-singular="round" data-label-mode="count" />
+                <div class="setting-value" id="settingsRoundsValue">4 rounds</div>
+              </div>
               <small>Classic Pomodoro = 4 rounds.</small>
             </label>
           </div>
