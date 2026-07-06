@@ -11,6 +11,45 @@ const CLOUD_CLIENT_ID_KEY = 'jee_pomodoro_flow_v4_cloud_client_id';
 const CLOUD_SYNC_DEBOUNCE_MS = 2500;
 const CLOUD_SYNC_RETRY_BASE_MS = 2000;
 const CLOUD_SYNC_RETRY_MAX_MS = 60000;
+const DEFAULT_THEME = 'midnight';
+const THEMES = {
+  midnight: {
+    label: 'Midnight',
+    accent: '#7c3aed', accent2: '#22c55e', danger: '#fb7185',
+    phy: '#38bdf8', chem: '#34d399', math: '#c084fc',
+    bg1: '#090d18', bg2: '#0b1020', bg3: '#060914',
+    glow1: 'rgba(124,58,237,.28)', glow2: 'rgba(34,197,94,.12)',
+    text: '#e5eefc', muted: '#91a4c7', shadow: '0 20px 60px rgba(0,0,0,.35)',
+    themeColor: '#0f172a'
+  },
+  aurora: {
+    label: 'Aurora',
+    accent: '#06b6d4', accent2: '#a78bfa', danger: '#fb7185',
+    phy: '#22d3ee', chem: '#86efac', math: '#c4b5fd',
+    bg1: '#06101b', bg2: '#081826', bg3: '#030712',
+    glow1: 'rgba(6,182,212,.24)', glow2: 'rgba(167,139,250,.16)',
+    text: '#e5eefc', muted: '#9bb5d9', shadow: '0 20px 60px rgba(0,0,0,.35)',
+    themeColor: '#082032'
+  },
+  sunset: {
+    label: 'Sunset',
+    accent: '#f97316', accent2: '#fb7185', danger: '#f43f5e',
+    phy: '#fdba74', chem: '#f9a8d4', math: '#fbbf24',
+    bg1: '#140b12', bg2: '#1a1021', bg3: '#09060a',
+    glow1: 'rgba(249,115,22,.24)', glow2: 'rgba(251,113,133,.16)',
+    text: '#fff1f2', muted: '#f3c7d4', shadow: '0 20px 60px rgba(0,0,0,.35)',
+    themeColor: '#3b0f1e'
+  },
+  forest: {
+    label: 'Forest',
+    accent: '#22c55e', accent2: '#84cc16', danger: '#fb7185',
+    phy: '#7dd3fc', chem: '#4ade80', math: '#bef264',
+    bg1: '#07110b', bg2: '#0d1911', bg3: '#030705',
+    glow1: 'rgba(34,197,94,.22)', glow2: 'rgba(132,204,22,.14)',
+    text: '#ecfdf5', muted: '#a7c8ba', shadow: '0 20px 60px rgba(0,0,0,.35)',
+    themeColor: '#0a1f15'
+  }
+};
 
 const els = {
   menuBtn: $('menuBtn'),
@@ -34,6 +73,7 @@ const els = {
   settingsAutoStartInput: $('settingsAutoStartInput'),
   settingsSoundInput: $('settingsSoundInput'),
   settingsPulseInput: $('settingsPulseInput'),
+  settingsThemeSelect: $('settingsThemeSelect'),
   settingsResetBtn: $('settingsResetBtn'),
   sessionModalDescription: $('sessionModalDescription'),
   sessionDuration: $('sessionDuration'),
@@ -103,6 +143,7 @@ const defaultState = {
   autoStart: false,
   sound: true,
   pulse: true,
+  theme: DEFAULT_THEME,
   noBreakMode: false,
   currentMode: 'focus',
   cycleCount: 1,
@@ -134,6 +175,7 @@ let currentSubject = state.lastSubject || 'Physics';
 let currentAnalyticsDetail = null;
 let currentAnalyticsSession = null;
 let titleTapTimer = null;
+let uiToneTimer = null;
 let savingSession = false;
 let cloudSyncReady = null;
 let cloudSyncQueued = false;
@@ -187,6 +229,21 @@ function saveState(options = {}) {
     return false;
   }
 }
+function normalizeTheme(theme) {
+  return Object.prototype.hasOwnProperty.call(THEMES, theme) ? theme : DEFAULT_THEME;
+}
+
+function applyTheme(theme = state.theme || DEFAULT_THEME, options = {}) {
+  const nextTheme = normalizeTheme(theme);
+  state.theme = nextTheme;
+  document.body.dataset.theme = nextTheme;
+  document.body.classList.add('theme-switching');
+  clearTimeout(uiToneTimer);
+  uiToneTimer = setTimeout(() => document.body.classList.remove('theme-switching'), 260);
+  const themeColor = THEMES[nextTheme]?.themeColor || THEMES[DEFAULT_THEME].themeColor;
+  if (els.themeColorMeta && options.updateMeta !== false) els.themeColorMeta.setAttribute('content', themeColor);
+}
+
 function normalizeProfile(profile) {
   const fallback = { name: '', createdAt: 0, updatedAt: 0 };
   if (!profile || typeof profile !== 'object') return fallback;
@@ -840,13 +897,56 @@ function escapeHtml(value) {
 function openDrawer() {
   els.drawer.classList.remove('hidden');
   els.drawerBackdrop.classList.remove('hidden');
+  playUiSound('open');
 }
-function closeDrawer() {
+function closeDrawer(silent = false) {
   els.drawer.classList.add('hidden');
   els.drawerBackdrop.classList.add('hidden');
+  if (!silent) playUiSound('close');
+}
+function playUiSound(kind = 'tap') {
+  if (!state.sound) return;
+  try {
+    audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+    const patterns = {
+      open: [[300, 0.04, 0.05], [520, 0.05, 0.04]],
+      close: [[220, 0.03, 0.04]],
+      nav: [[440, 0.03, 0.05], [660, 0.05, 0.045]],
+      timer: [[660, 0.04, 0.05]],
+      analytics: [[520, 0.04, 0.05], [784, 0.05, 0.04]],
+      settings: [[494, 0.04, 0.05], [740, 0.05, 0.04]],
+      leaderboard: [[587, 0.04, 0.05], [830, 0.05, 0.04]],
+      achievements: [[698, 0.04, 0.05], [1046, 0.05, 0.04]],
+      success: [[784, 0.05, 0.06], [988, 0.07, 0.045]],
+      toggle: [[392, 0.025, 0.035], [523, 0.03, 0.03]],
+      theme: [[494, 0.03, 0.04], [659, 0.04, 0.035], [784, 0.04, 0.03]],
+      tap: [[480, 0.03, 0.04]]
+    };
+    const seq = patterns[kind] || patterns.tap;
+    let start = audioCtx.currentTime + 0.01;
+    seq.forEach(([freq, duration, volume], index) => {
+      const at = start + (index * 0.075);
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      osc.frequency.value = freq;
+      osc.type = 'sine';
+      gain.gain.setValueAtTime(0.0001, at);
+      gain.gain.exponentialRampToValueAtTime(volume, at + 0.012);
+      gain.gain.exponentialRampToValueAtTime(0.0001, at + duration);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(at);
+      osc.stop(at + duration + 0.04);
+    });
+  } catch {}
 }
 function setPage(page) {
-  state.page = ['timer', 'analytics', 'settings', 'leaderboard', 'achievements'].includes(page) ? page : 'timer';
+  const nextPage = ['timer', 'analytics', 'settings', 'leaderboard', 'achievements'].includes(page) ? page : 'timer';
+  const previousPage = state.page;
+  state.page = nextPage;
+  document.body.dataset.page = state.page;
+  applyTheme(state.theme, { updateMeta: true });
   els.timerPage.classList.toggle('active', state.page === 'timer');
   if (els.analyticsPage) els.analyticsPage.classList.toggle('active', state.page === 'analytics');
   if (els.settingsPage) els.settingsPage.classList.toggle('active', state.page === 'settings');
@@ -854,8 +954,9 @@ function setPage(page) {
   if (els.achievementsPage) els.achievementsPage.classList.toggle('active', state.page === 'achievements');
   document.querySelectorAll('.drawer-item[data-page]').forEach(btn => btn.classList.toggle('active', btn.dataset.page === state.page));
   saveState();
-  closeDrawer();
+  closeDrawer(true);
   render();
+  if (previousPage !== state.page) playUiSound(state.page === 'timer' ? 'timer' : state.page);
 }
 function renderTimerOnly() {
   els.timer.textContent = fmt(state.remaining);
@@ -1036,6 +1137,8 @@ function render(options = {}) {
       (state.currentMode !== 'focus' && state.remaining === state.total ? 'Break ready' :
         (state.remaining === state.total ? 'Ready to lock in' : 'Paused')))
   );
+  document.body.dataset.page = state.page;
+  applyTheme(state.theme, { updateMeta: true });
   const pct = 1 - (state.remaining / state.total || 1);
   els.progressRing.style.strokeDashoffset = String(CIRC * (1 - clamp(pct, 0, 1)));
   document.body.style.boxShadow = state.pulse ? 'inset 0 0 100px rgba(124,58,237,0.08)' : 'none';
@@ -1190,7 +1293,7 @@ function beep(freq = 880, duration = 0.14) {
   } catch {}
 }
 function celebrate(mode) {
-  if (state.sound) beep(mode === 'focus' ? 880 : 660, 0.18);
+  if (state.sound) playUiSound(mode === 'focus' ? 'success' : 'nav');
   if (navigator.vibrate) navigator.vibrate([60, 40, 60]);
   if ('Notification' in window && Notification.permission === 'granted') {
     new Notification(mode === 'focus' ? 'Focus complete' : 'Break over', {
@@ -1776,6 +1879,7 @@ function renderSettings() {
   if (els.settingsAutoStartInput) els.settingsAutoStartInput.checked = Boolean(state.autoStart);
   if (els.settingsSoundInput) els.settingsSoundInput.checked = Boolean(state.sound);
   if (els.settingsPulseInput) els.settingsPulseInput.checked = Boolean(state.pulse);
+  if (els.settingsThemeSelect) els.settingsThemeSelect.value = normalizeTheme(state.theme);
 }
 function applySettingsFromUI() {
   if (!els.settingsPage) return;
@@ -1783,11 +1887,13 @@ function applySettingsFromUI() {
   const parsedShort = Number.parseInt(els.settingsShortBreakInput?.value, 10);
   const parsedLong = Number.parseInt(els.settingsLongBreakInput?.value, 10);
   const parsedRounds = Number.parseInt(els.settingsRoundsInput?.value, 10);
+  const nextTheme = normalizeTheme(els.settingsThemeSelect?.value || state.theme);
   const next = {
     focus: Number.isFinite(parsedFocus) && parsedFocus >= 1 && parsedFocus <= 60 ? parsedFocus : state.focus,
     shortBreak: Number.isFinite(parsedShort) && parsedShort >= 1 && parsedShort <= 30 ? parsedShort : state.shortBreak,
     longBreak: Number.isFinite(parsedLong) && parsedLong >= 1 && parsedLong <= 45 ? parsedLong : state.longBreak,
     roundsBeforeLong: Number.isFinite(parsedRounds) && parsedRounds >= 2 && parsedRounds <= 8 ? parsedRounds : state.roundsBeforeLong,
+    theme: nextTheme,
     noBreakMode: Boolean(els.settingsNoBreakInput?.checked),
     autoStart: Boolean(els.settingsAutoStartInput?.checked),
     sound: Boolean(els.settingsSoundInput?.checked),
@@ -1797,7 +1903,10 @@ function applySettingsFromUI() {
   state.focus = next.focus;
   state.shortBreak = next.shortBreak;
   state.longBreak = next.longBreak;
+  const themeChanged = state.theme !== next.theme;
   state.roundsBeforeLong = next.roundsBeforeLong;
+  state.theme = next.theme;
+  applyTheme(state.theme);
   state.noBreakMode = next.noBreakMode;
   state.autoStart = next.autoStart;
   state.sound = next.sound;
@@ -1808,6 +1917,7 @@ function applySettingsFromUI() {
   }
   saveState({ immediate: true, reason: 'settings-updated' });
   render({ skipSave: true });
+  if (themeChanged) playUiSound('theme');
 }
 function resetSettingsToDefaults() {
   state.focus = 25;
@@ -1818,6 +1928,8 @@ function resetSettingsToDefaults() {
   state.autoStart = false;
   state.sound = true;
   state.pulse = true;
+  state.theme = DEFAULT_THEME;
+  applyTheme(state.theme);
   if (!state.running && !state.pendingSession) {
     state.currentMode = 'focus';
     state.total = secondsForMode('focus');
@@ -1825,6 +1937,7 @@ function resetSettingsToDefaults() {
   }
   saveState({ immediate: true, reason: 'settings-reset' });
   render({ skipSave: true });
+  playUiSound('success');
   showToast('Settings reset');
 }
 
@@ -1838,6 +1951,7 @@ function init() {
   if (!state.analyticsSelections || typeof state.analyticsSelections !== 'object') state.analyticsSelections = { weekly: -1, monthly: -1 };
   if (typeof state.analyticsSelections.weekly !== 'number') state.analyticsSelections.weekly = -1;
   if (typeof state.analyticsSelections.monthly !== 'number') state.analyticsSelections.monthly = -1;
+  applyTheme(state.theme, { updateMeta: true });
   sanitizeNumbers();
   if (!state.total) state.total = secondsForMode(state.currentMode);
   if (!state.remaining) state.remaining = state.total;
@@ -1846,6 +1960,8 @@ function init() {
   state.remaining = clamp(Number(state.remaining) || state.total, 0, state.total || secondsForMode(state.currentMode));
   state.total = Math.max(1, Number(state.total) || secondsForMode(state.currentMode));
 
+  document.body.dataset.page = state.page;
+  applyTheme(state.theme, { updateMeta: true });
   els.timerPage.classList.toggle('active', state.page === 'timer');
   if (els.analyticsPage) els.analyticsPage.classList.toggle('active', state.page === 'analytics');
   if (els.settingsPage) els.settingsPage.classList.toggle('active', state.page === 'settings');
@@ -1945,6 +2061,19 @@ function init() {
 
 els.menuBtn.addEventListener('click', openDrawer);
 els.aboutBtn.addEventListener('click', openDrawer);
+
+document.addEventListener('click', (e) => {
+  const btn = e.target instanceof Element ? e.target.closest('button, .chip, .tab') : null;
+  if (!btn || btn.dataset.uiSound === 'off' || btn.disabled) return;
+  if (btn.id === 'menuBtn' || btn.id === 'aboutBtn' || btn.classList.contains('drawer-item')) return;
+  playUiSound(btn.dataset.uiSound || 'tap');
+}, true);
+
+document.addEventListener('change', (e) => {
+  const target = e.target;
+  if (!(target instanceof Element)) return;
+  if (target.matches('input[type="checkbox"]')) playUiSound('toggle');
+});
 if (els.profileSaveBtn) els.profileSaveBtn.addEventListener('click', saveProfileFromInput);
 if (els.profileInput) {
   els.profileInput.addEventListener('keydown', (e) => {
@@ -2097,7 +2226,7 @@ if (els.settingsPage) {
     input.addEventListener('change', applySettingsFromUI);
     input.addEventListener('blur', applySettingsFromUI);
   });
-  [els.settingsNoBreakInput, els.settingsAutoStartInput, els.settingsSoundInput, els.settingsPulseInput].forEach(input => {
+  [els.settingsNoBreakInput, els.settingsAutoStartInput, els.settingsSoundInput, els.settingsPulseInput, els.settingsThemeSelect].forEach(input => {
     if (!input) return;
     input.addEventListener('change', applySettingsFromUI);
   });
